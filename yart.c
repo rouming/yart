@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 #define MATH_3D_IMPLEMENTATION
 #include "math_3d.h"
@@ -94,7 +95,8 @@ enum material_type {
 struct object;
 
 struct object_ops {
-	bool (*intersect)(struct object *obj, const vec3_t *from, const vec3_t *to,
+	void (*deinit)(struct object *obj);
+	bool (*intersect)(struct object *obj, const vec3_t *orig, const vec3_t *dir,
 			  float *near, uint32_t *index, vec2_t *uv);
 	void (*get_surface_props)(struct object *obj, const vec3_t *hit_point,
 				  const vec3_t *dir, uint32_t index, const vec2_t *uv,
@@ -128,6 +130,12 @@ static void object_init(struct object *obj, struct object_ops *ops,
 	obj->n = 10.0f;
 }
 
+static void object_deinit(struct object *obj)
+{
+	if (obj->ops->deinit)
+		obj->ops->deinit(obj);
+}
+
 struct sphere {
 	struct object obj;
 	float radius;
@@ -135,8 +143,8 @@ struct sphere {
 	vec3_t center;
 };
 
-static bool sphere_intersect(struct object *obj, const vec3_t *from,
-			     const vec3_t *to, float *near, uint32_t *index,
+static bool sphere_intersect(struct object *obj, const vec3_t *orig,
+			     const vec3_t *dir, float *near, uint32_t *index,
 			     vec2_t *uv)
 {
 	struct sphere *sphere = container_of(obj, struct sphere, obj);
@@ -149,9 +157,9 @@ static bool sphere_intersect(struct object *obj, const vec3_t *from,
 	float t0, t1;
 
 	/* analytic solution */
-	vec3_t L = v3_sub(*from, sphere->center);
-        float a = v3_dot(*to, *to);
-        float b = 2 * v3_dot(*to, L);
+	vec3_t L = v3_sub(*orig, sphere->center);
+        float a = v3_dot(*dir, *dir);
+        float b = 2 * v3_dot(*dir, L);
         float c = v3_dot(L, L) - sphere->radius_pow2;
 
         if (!solve_quadratic(a, b, c, &t0, &t1))
@@ -204,6 +212,310 @@ static void sphere_init(struct sphere *sphere, const mat4_t *o2w, float radius)
 	sphere->radius_pow2 = radius * radius;
 	sphere->center = m4_mul_pos(*o2w, vec3(0.0f, 0.0f, 0.0f));
 }
+
+struct triangle_mesh {
+	struct object obj;
+	uint32_t num_tris;       /* number of triangles */
+	vec3_t   *P;             /* triangles vertex position */
+	uint32_t *tris_index;    /* vertex index array */
+	vec3_t   *N;             /* triangles vertex normals */
+	vec2_t   *sts;           /* triangles texture coordinates */
+	bool     smooth_shading; /* smooth shading */
+};
+
+static void triangle_mesh_deinit(struct object *obj)
+{
+	struct triangle_mesh *mesh =
+		container_of(obj, struct triangle_mesh, obj);
+
+	free(mesh->P);
+	free(mesh->tris_index);
+	free(mesh->N);
+	free(mesh->sts);
+}
+
+static bool triangle_intersect(const vec3_t *orig, const vec3_t *dir,
+			       const vec3_t *v0, const vec3_t *v1, const vec3_t *v2,
+			       float *t, float *u, float *v)
+{
+	vec3_t v0v1 = v3_sub(*v1, *v0);
+	vec3_t v0v2 = v3_sub(*v2, *v0);
+	vec3_t pvec = v3_cross(*dir, v0v2);
+	float det = v3_dot(v0v1, pvec);
+	vec3_t tvec, qvec;
+
+	float inv_det;
+
+	/* ray and triangle are parallel if det is close to 0 */
+	if (fabs(det) < EPSILON)
+		return false;
+
+	inv_det = 1 / det;
+
+	tvec = v3_sub(*orig, *v0);
+	*u = v3_dot(tvec, pvec) * inv_det;
+	if (*u < 0 || *u > 1)
+		return false;
+
+	qvec = v3_cross(tvec, v0v1);
+	*v = v3_dot(*dir, qvec) * inv_det;
+	if (*v < 0 || *u + *v > 1)
+		return false;
+
+	*t = v3_dot(v0v2, qvec) * inv_det;
+
+	return (*t > 0);
+}
+
+static bool triangle_mesh_intersect(struct object *obj, const vec3_t *orig,
+				    const vec3_t *dir, float *near, uint32_t *index,
+				    vec2_t *uv)
+{
+	struct triangle_mesh *mesh =
+		container_of(obj, struct triangle_mesh, obj);
+
+	uint32_t j, i;
+        bool isect;
+
+	isect = false;
+        for (i = 0, j = 0; i < mesh->num_tris; i++) {
+		const vec3_t *P = mesh->P;
+		const vec3_t *v0 = &P[mesh->tris_index[j + 0]];
+		const vec3_t *v1 = &P[mesh->tris_index[j + 1]];
+		const vec3_t *v2 = &P[mesh->tris_index[j + 2]];
+		float t = INFINITY, u, v;
+
+		if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
+		    t < *near) {
+			*near = t;
+			uv->x = u;
+			uv->y = v;
+			*index = i;
+			isect = true;
+		}
+		j += 3;
+        }
+
+        return isect;
+}
+
+static void triangle_mesh_get_surface_props(struct object *obj, const vec3_t *hit_point,
+					    const vec3_t *dir, uint32_t index,
+					    const vec2_t *uv, vec3_t *hit_normal,
+					    vec2_t *hit_tex_coords)
+{
+	struct triangle_mesh *mesh =
+		container_of(obj, struct triangle_mesh, obj);
+
+	vec2_t st0, st1, st2;
+	const vec2_t *sts;
+
+	if (mesh->smooth_shading) {
+		/* vertex normal */
+		const vec3_t *N = mesh->N;
+		vec3_t n0 = N[index * 3 + 0];
+		vec3_t n1 = N[index * 3 + 1];
+		vec3_t n2 = N[index * 3 + 2];
+
+		n0 = v3_muls(n0, 1 - uv->x - uv->y);
+		n1 = v3_muls(n1, uv->x);
+		n1 = v3_muls(n2, uv->y);
+
+		*hit_normal = v3_add(n2, v3_add(n0, n1));
+        }
+        else {
+		/* face normal */
+		const vec3_t *P = mesh->P;
+		vec3_t v0 = P[mesh->tris_index[index * 3 + 0]];
+		vec3_t v1 = P[mesh->tris_index[index * 3 + 1]];
+		vec3_t v2 = P[mesh->tris_index[index * 3 + 2]];
+
+		vec3_t v1v0 = v3_sub(v1, v0);
+		vec3_t v2v0 = v3_sub(v2, v0);
+
+		*hit_normal = v3_cross(v1v0, v2v0);
+        }
+
+        /*
+	 * doesn't need to be normalized as the N's are
+	 * normalized but just for safety
+	 */
+	*hit_normal = v3_norm(*hit_normal);
+
+        /* texture coordinates */
+	sts = mesh->sts;
+        st0 = sts[index * 3 + 0];
+        st1 = sts[index * 3 + 1];
+        st2 = sts[index * 3 + 2];
+
+	st0 = v2_muls(st0, 1 - uv->x - uv->y);
+	st1 = v2_muls(st1, uv->x);
+	st2 = v2_muls(st2, uv->y);
+
+        *hit_tex_coords = v2_add(st2, v2_add(st0, st1));
+}
+
+struct object_ops triangle_mesh_ops = {
+	.deinit            = triangle_mesh_deinit,
+	.intersect         = triangle_mesh_intersect,
+	.get_surface_props = triangle_mesh_get_surface_props
+};
+
+static void triangle_mesh_init(struct triangle_mesh *mesh, const mat4_t *o2w,
+			       uint32_t nfaces, uint32_t *face_index,
+			       uint32_t *verts_index, vec3_t *verts,
+			       vec3_t *normals, vec2_t *st)
+{
+	uint32_t i, j, l, k = 0, max_vert_index = 0;
+	uint32_t num_tris = 0;
+
+	uint32_t *tris_index;
+	vec3_t *P, *N;
+	vec2_t *sts;
+
+	mat4_t transform_normals;
+
+	/* find out how many triangles we need to create for this mesh */
+	for (i = 0; i < nfaces; ++i) {
+		num_tris += face_index[i] - 2;
+		for (j = 0; j < face_index[i]; ++j) {
+			if (verts_index[k + j] > max_vert_index)
+				max_vert_index = verts_index[k + j];
+		}
+		k += face_index[i];
+        }
+        max_vert_index += 1;
+
+	/* allocate memory to store the position of the mesh vertices */
+        P = calloc(max_vert_index, sizeof(*P));
+	assert(P);
+
+	/* Transform vertices to world space */
+        for (i = 0; i < max_vert_index; ++i)
+		P[i] = m4_mul_pos(*o2w, verts[i]);
+
+	tris_index = calloc(num_tris * 3, sizeof(*tris_index));
+	assert(tris_index);
+
+	N = calloc(num_tris * 3, sizeof(*N));
+	assert(N);
+
+	sts = calloc(num_tris * 3, sizeof(*sts));
+	assert(sts);
+
+	/* Init object */
+	object_init(&mesh->obj, &triangle_mesh_ops, o2w);
+
+	/* Computing the transpse of the object-to-world inverse matrix */
+        transform_normals = m4_transpose(mesh->obj.w2o);
+
+        /* Generate the triangle index array and set normals and st coordinates */
+        for (i = 0, k = 0, l = 0; i < nfaces; i++) {
+		/* Each triangle in a face */
+		for (j = 0; j < face_index[i] - 2; j++) {
+			tris_index[l + 0] = verts_index[k];
+			tris_index[l + 1] = verts_index[k + j + 1];
+			tris_index[l + 2] = verts_index[k + j + 2];
+
+			/* Transforming normals */
+			N[l + 0] = m4_mul_dir(transform_normals, normals[k]);
+			N[l + 1] = m4_mul_dir(transform_normals, normals[k + j + 1]);
+			N[l + 2] = m4_mul_dir(transform_normals, normals[k + j + 2]);
+
+			N[l + 0] = v3_norm(N[l + 0]);
+			N[l + 1] = v3_norm(N[l + 1]);
+			N[l + 2] = v3_norm(N[l + 2]);
+
+			sts[l + 0] = st[k];
+			sts[l + 1] = st[k + j + 1];
+			sts[l + 2] = st[k + j + 2];
+			l += 3;
+		}
+		k += face_index[i];
+        }
+
+	mesh->num_tris = num_tris;
+	mesh->P = P;
+	mesh->tris_index = tris_index;
+	mesh->N = N;
+	mesh->sts = sts;
+}
+
+static void mesh_load(struct triangle_mesh *mesh, const char *file,
+		      const mat4_t *o2w)
+{
+	uint32_t num_faces, verts_ind_arr_sz, verts_arr_sz;
+	int ret, i;
+	FILE *f;
+
+	uint32_t *face_index, *verts_index;
+	vec3_t *verts, *normals;
+	vec2_t *st;
+
+	f = fopen(file, "r");
+	assert(f);
+
+	ret = fscanf(f, "%d", &num_faces);
+	assert(ret == 1);
+
+	face_index = calloc(num_faces, sizeof(*face_index));
+	assert(face_index);
+
+	for (i = 0, verts_ind_arr_sz = 0; i < num_faces; i++) {
+		ret = fscanf(f, "%d", &face_index[i]);
+		assert(ret == 1);
+		verts_ind_arr_sz += face_index[i];
+	}
+
+	verts_index = calloc(verts_ind_arr_sz, sizeof(*verts_index));
+	assert(verts_index);
+
+	for (i = 0, verts_arr_sz = 0; i < verts_ind_arr_sz; i++) {
+		ret = fscanf(f, "%d", &verts_index[i]);
+		assert(ret == 1);
+		if (verts_index[i] > verts_arr_sz)
+			verts_arr_sz = verts_index[i];
+	}
+	verts_arr_sz += 1;
+
+	verts = calloc(verts_arr_sz, sizeof(*verts));
+	assert(verts);
+
+	for (i = 0; i < verts_arr_sz; i++) {
+		vec3_t *vert = &verts[i];
+		ret = fscanf(f, "%f%f%f", &vert->x, &vert->y, &vert->z);
+		assert(ret == 3);
+	}
+
+	normals = calloc(verts_arr_sz, sizeof(*normals));
+	assert(normals);
+
+	for (i = 0; i < verts_arr_sz; i++) {
+		vec3_t *norm = &normals[i];
+		ret = fscanf(f, "%f%f%f", &norm->x, &norm->y, &norm->z);
+		assert(ret == 3);
+	}
+
+	st = calloc(verts_arr_sz, sizeof(*st));
+	assert(st);
+
+	for (i = 0; i < verts_arr_sz; i++) {
+		vec2_t *coord = &st[i];
+		ret = fscanf(f, "%f%f", &coord->x, &coord->y);
+		assert(ret == 2);
+	}
+	fclose(f);
+
+	triangle_mesh_init(mesh, o2w, num_faces, face_index,
+			   verts_index, verts, normals, st);
+
+	free(face_index);
+	free(verts_index);
+	free(verts);
+	free(normals);
+	free(st);
+}
+
 
 struct light;
 
@@ -317,8 +629,8 @@ static bool trace(const vec3_t *orig, const vec3_t *dir,
 	isect->near = INFINITY;
 
 	for (; object; object = object->next) {
-		float near;
-		uint32_t index;
+		float near = INFINITY;
+		uint32_t index = 0;
 		vec2_t uv;
 
 		if (object->ops->intersect(object, orig, dir, &near, &index, &uv) &&
@@ -562,11 +874,12 @@ static void render(const struct options *options,
  */
 int main(int argc, char **argv)
 {
+	struct triangle_mesh mesh;
 	struct sphere spheres[5];
 	struct distant_light dlight;
 	struct object *prev;
+	mat4_t l2w, o2w;
 	vec3_t color;
-	mat4_t l2w;
 
 	float w[5] = {0.04, 0.08, 0.1, 0.15, 0.2};
 	int i = -4, n = 2, k = 0;
@@ -583,12 +896,16 @@ int main(int argc, char **argv)
 	options.c2w.m32 = 12;
 	options.c2w.m31 = 1;
 
+	/* Init mesh */
+	o2w = m4_identity();
+	mesh_load(&mesh, "./plane.geo", &o2w);
+
 	/* Init objects */
 	for (prev = NULL; i <= 4; i+= 2, n *= 5, k++) {
 		struct sphere *sphere = &spheres[k];
-		mat4_t o2w = m4_identity();
 
 		/* Object position */
+		o2w = m4_identity();
 		o2w.m30 = i;
 		o2w.m31 = 1;
 
@@ -597,9 +914,12 @@ int main(int argc, char **argv)
 		sphere->obj.Ks = w[k];
 
 		if (prev)
+			/* Chain objects */
 			prev->next = &sphere->obj;
 		prev = &sphere->obj;
 	}
+	/* Chain mesh */
+	prev->next = &mesh.obj;
 
 	/* Init light */
 	l2w = mat4(11.146836, -5.781569, -0.0605886, 0,
@@ -615,6 +935,8 @@ int main(int argc, char **argv)
 
 	/* Finally render */
 	render(&options, &spheres[0].obj, &dlight.light);
+
+	object_deinit(&mesh.obj);
 
 	return 0;
 }
