@@ -21,19 +21,19 @@ static const vec3_t BACKG_COLOR = {0.235294f, 0.67451f, 0.843137f};
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define SWAP(a, b) do { typeof(a) temp = a; a = b; b = temp; } while (0)
 
-#define container_of(ptr, type, member) ({ \
-                        const typeof( ((type*)0)->member ) \
-                        * __mptr = ((void*)(ptr)); \
-                        (type*)( (char*)__mptr - \
-                        offsetof(type, member) ); \
-                        })
+#define container_of(ptr, type, member) ({			\
+                        const typeof( ((type*)0)->member )	\
+				* __mptr = ((void*)(ptr));	\
+                        (type*)( (char*)__mptr -		\
+				 offsetof(type, member) );	\
+		})
 
 static inline unsigned long long nsecs(void)
 {
-    struct timespec ts = {0, 0};
+	struct timespec ts = {0, 0};
 
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((unsigned long long)ts.tv_sec * 1000000000ull) + ts.tv_nsec;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ((unsigned long long)ts.tv_sec * 1000000000ull) + ts.tv_nsec;
 }
 
 static inline float clamp(float lo, float hi, float v)
@@ -614,10 +614,10 @@ enum ray_type {
 };
 
 struct intersection {
-    struct object *hit_object;
-    float near;
-    vec2_t uv;
-    uint32_t index;
+	struct object *hit_object;
+	float near;
+	vec2_t uv;
+	uint32_t index;
 };
 
 static bool trace(const vec3_t *orig, const vec3_t *dir,
