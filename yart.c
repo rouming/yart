@@ -79,38 +79,119 @@ struct opencl {
 	cl_command_queue queue;
 	cl_program       program;
 	cl_kernel        kernel;
-	uint32_t         global_item_size;
 };
 
-static inline void *allocate(struct opencl *opencl, size_t sz)
+enum {
+	BUF_MAP_WRITE = 1<<0,
+	BUF_MAP_READ  = 1<<1,
+	BUF_ZERO      = 1<<2,
+};
+
+struct buf_region {
+	struct opencl *opencl;
+	uint32_t      size;
+	uint32_t      flags;
+};
+
+static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
 {
+	struct buf_region *reg;
 	void *ptr;
+	int ret;
 
-	sz += 8;
+	if (!sz)
+		return NULL;
+
 	if (opencl) {
-		ptr = clSVMAlloc(opencl->context, CL_MEM_READ_WRITE, sz, 0);
+		reg = clSVMAlloc(opencl->context,
+				 CL_MEM_READ_WRITE /* | CL_MEM_SVM_FINE_GRAIN_BUFFER */,
+				 sz + 16, 0);
+		if (reg && (flags & (BUF_MAP_WRITE | BUF_MAP_READ))) {
+			cl_map_flags cl_flags = 0;
+
+			if (flags & BUF_MAP_WRITE)
+				cl_flags |= CL_MAP_WRITE;
+			if (flags & BUF_MAP_READ)
+				cl_flags |= CL_MAP_READ;
+
+			ret = clEnqueueSVMMap(opencl->queue, CL_TRUE, cl_flags,
+					      (void *)reg + 16, sz, 0,
+					      NULL, NULL);
+			if (ret) {
+				clSVMFree(opencl->context, reg);
+				return NULL;
+			}
+		}
 	} else {
-		ptr = malloc(sz);
+		reg = malloc(sz + 16);
 	}
-	if (!ptr)
-		return ptr;
+	if (!reg)
+		return NULL;
 
-	*(struct opencl **)ptr = opencl;
+	ptr = (void *)reg + 16;
 
-	return ptr + 8;
+	if (flags & BUF_ZERO)
+		memset(ptr, 0, sz);
+
+	reg->opencl = opencl;
+	reg->flags = flags;
+	reg->size = sz;
+
+	return ptr;
 }
 
-static inline void destroy(void *ptr)
+static void *buf_allocate(struct opencl *opencl, size_t sz)
 {
-	struct opencl *opencl;
+	return __buf_allocate(opencl, sz, BUF_ZERO | BUF_MAP_WRITE | BUF_MAP_READ);
+}
 
-	ptr -= 8;
-	opencl = *(struct opencl **)ptr;
-	if (opencl) {
-		clSVMFree(opencl->context, ptr);
+static void buf_destroy(void *ptr)
+{
+	struct buf_region *reg = (ptr - 16);
+
+	if (reg->opencl) {
+		clSVMFree(reg->opencl->context, reg);
 	} else {
-		free(ptr);
+		free(reg);
 	}
+}
+
+static int buf_map(void *ptr, uint32_t flags)
+{
+	struct buf_region *reg = (ptr - 16);
+	cl_map_flags cl_flags = 0;
+	int ret = 0;
+
+	if (!flags)
+		return -EINVAL;
+
+	if (flags & BUF_MAP_WRITE)
+		cl_flags |= CL_MAP_WRITE;
+	if (flags & BUF_MAP_READ)
+		cl_flags |= CL_MAP_READ;
+
+	if (reg->opencl) {
+		ret = clEnqueueSVMMap(reg->opencl->queue, CL_TRUE,
+				      cl_flags, ptr, reg->size,
+				      0, NULL, NULL);
+		if (!ret)
+			reg->flags = flags;
+	}
+
+	return ret;
+}
+
+static int buf_unmap(void *ptr)
+{
+	struct buf_region *reg = (ptr - 16);
+	int ret = 0;
+
+	if (reg->opencl) {
+		ret = clEnqueueSVMUnmap(reg->opencl->queue, ptr,
+					0, NULL, NULL);
+	}
+
+	return ret;
 }
 
 static inline unsigned long long nsecs(void)
@@ -729,57 +810,6 @@ __kernel void render_opencl(__global struct scene *scene)
 
 #else /* !__OPENCL__ */
 
-static void render(struct scene *scene)
-{
-	vec3_t *buffer, *pix, orig;
-	float scale, img_ratio;
-	unsigned long long ns;
-	uint32_t i, j;
-	FILE *out;
-
-	buffer = pix = calloc(scene->width * scene->height, sizeof(*buffer));
-	assert(buffer);
-
-	scale = tan(deg2rad(scene->fov * 0.5));
-	img_ratio = scene->width / (float)scene->height;
-
-	/* Camera position */
-	orig = m4_mul_pos(scene->c2w, vec3(0.f, 0.f, 0.f));
-
-	ns = nsecs();
-
-	for (j = 0; j < scene->height; ++j) {
-		for (i = 0; i < scene->width; ++i) {
-			float x = (2 * (i + 0.5) / (float)scene->width - 1) *	img_ratio * scale;
-			float y = (1 - 2 * (j + 0.5) / (float)scene->height) * scale;
-			vec3_t dir;
-
-			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
-			dir = v3_norm(dir);
-
-			*pix = cast_ray(scene, &orig, &dir, 0);
-			pix++;
-		}
-		fprintf(stderr, "\r%3d%c", (uint32_t)(j / (float)scene->height * 100), '%');
-	}
-	fprintf(stderr, "\rDone: %.2f (sec)\n", (nsecs() - ns) / 1000000000.0);
-
-	/* save framebuffer to file */
-	out = fopen("yart-out.ppm", "w");
-	assert(out);
-
-	fprintf(out, "P6\n%d %d\n255\n", scene->width, scene->height);
-	for (i = 0; i < scene->height * scene->width; ++i) {
-		char r = (char)(255 * clamp(0.0f, 1.0f, buffer[i].x));
-		char g = (char)(255 * clamp(0.0f, 1.0f, buffer[i].y));
-		char b = (char)(255 * clamp(0.0f, 1.0f, buffer[i].z));
-
-		fprintf(out, "%c%c%c", r, g, b);
-	}
-	fclose(out);
-	free(buffer);
-}
-
 static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 {
 	/* Load current file */
@@ -787,6 +817,7 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 
 	cl_platform_id platform_id = NULL;
 	cl_device_id device_id = NULL;
+	cl_device_svm_capabilities caps;
 	cl_uint ret_num_devices;
 	cl_uint ret_num_platforms;
 	cl_command_queue queue;
@@ -816,14 +847,22 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
 	assert(!ret);
 
-	ret = clGetDeviceIDs(platform_id,
-			     CL_DEVICE_TYPE_GPU | CL_DEVICE_SVM_CAPABILITIES,
+	ret = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU,
 			     1, &device_id, &ret_num_devices);
 	assert(!ret);
 
 	/* Create an OpenCL context */
 	context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
 	assert(!ret);
+
+	/* Get caps */
+	ret = clGetDeviceInfo(device_id, CL_DEVICE_SVM_CAPABILITIES,
+			      sizeof(caps), &caps, 0);
+	assert(!ret);
+
+	if (caps & CL_DEVICE_SVM_FINE_GRAIN_BUFFER) {
+		/* TODO: support fine grained buffer, map-free */
+	}
 
 	/* Create a command queue */
 	queue = clCreateCommandQueueWithProperties(context, device_id, NULL, &ret);
@@ -837,7 +876,7 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	free(source);
 
 	/* Build the program */
-	ret = clBuildProgram(program, 1, &device_id, "-Werror -D__OPENCL__",
+	ret = clBuildProgram(program, 1, &device_id, "-cl-std=CL2.0 -Werror -D__OPENCL__",
 			     NULL, NULL);
 	if (ret == CL_BUILD_PROGRAM_FAILURE) {
 		size_t log_size;
@@ -890,45 +929,10 @@ static void opencl_deinit(struct opencl *opencl)
 	clReleaseContext(opencl->context);
 }
 
-#if 0
-static int opencl_prepare(struct opencl_ctx *ctx, struct scene *scene)
-{
-	/* Map a scene pointer to the device */
-//	scene_dev = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
-//				   sizeof(*scene), scene, &ret);
-//	assert(!ret);
-
-	/* Set the arguments of the kernel */
-//	ret = clSetKernelArg(kernel, 0, sizeof(scene_dev), &scene_dev);
-//	assert(!ret);
-	/* XXX
-	ret = clSetKernelArgSVMPointer(kernel, 1, framebuffer);
-	assert(!ret);
-	ret = clSetKernelArgSVMPointer(kernel, 2, objects);
-	assert(!ret);
-	ret = clSetKernelArgSVMPointer(kernel, 3, lights);
-	assert(!ret);
-	*/
-
-	/* Init context */
-//	ctx->scene_dev = scene_dev;
-	ctx->context = context;
-	ctx->device_id = device_id;
-	ctx->queue = queue;
-	ctx->program = program;
-	ctx->kernel = kernel;
-	ctx->global_item_size = scene->width * scene->height;
-
-	scene->opencl_ctx = ctx;
-
-	return 0;
-}
-#endif
-
-static int opencl_invoke(struct scene *scene)
+static void opencl_invoke(struct scene *scene)
 {
 	struct opencl *opencl = scene->opencl;
-	size_t global_item_size = opencl->global_item_size;
+	size_t global_item_size = scene->width * scene->height;
 	/* Divide work items into groups of 64 */
 	size_t local_item_size = 64;
 	int ret;
@@ -936,10 +940,11 @@ static int opencl_invoke(struct scene *scene)
 	ret = clSetKernelArgSVMPointer(opencl->kernel, 0, scene);
 	assert(!ret);
 
-	return clEnqueueNDRangeKernel(opencl->queue, opencl->kernel, 1, NULL,
-				      &global_item_size,
-				      &local_item_size, 0,
-				      NULL, NULL);
+	ret = clEnqueueNDRangeKernel(opencl->queue, opencl->kernel, 1, NULL,
+				     &global_item_size,
+				     &local_item_size, 0,
+				     NULL, NULL);
+	assert(!ret);
 }
 
 static void object_init(struct object *obj, struct object_ops *ops,
@@ -982,11 +987,11 @@ static void triangle_mesh_destroy(struct object *obj)
 	struct triangle_mesh *mesh =
 		container_of(obj, struct triangle_mesh, obj);
 
-	destroy(mesh->P);
-	destroy(mesh->tris_index);
-	destroy(mesh->N);
-	destroy(mesh->sts);
-	destroy(mesh);
+	buf_destroy(mesh->P);
+	buf_destroy(mesh->tris_index);
+	buf_destroy(mesh->N);
+	buf_destroy(mesh->sts);
+	buf_destroy(mesh);
 }
 
 struct object_ops triangle_mesh_ops = {
@@ -1021,20 +1026,20 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
         max_vert_index += 1;
 
 	/* allocate memory to store the position of the mesh vertices */
-        P = allocate(scene->opencl, max_vert_index * sizeof(*P));
+        P = buf_allocate(scene->opencl, max_vert_index * sizeof(*P));
 	assert(P);
 
 	/* Transform vertices to world space */
         for (i = 0; i < max_vert_index; ++i)
 		P[i] = m4_mul_pos(*o2w, verts[i]);
 
-	tris_index = allocate(scene->opencl, num_tris * 3 * sizeof(*tris_index));
+	tris_index = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*tris_index));
 	assert(tris_index);
 
-	N = allocate(scene->opencl, num_tris * 3 * sizeof(*N));
+	N = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*N));
 	assert(N);
 
-	sts = allocate(scene->opencl, num_tris * 3 * sizeof(*sts));
+	sts = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*sts));
 	assert(sts);
 
 	/* Init object */
@@ -1073,6 +1078,12 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 	mesh->tris_index = tris_index;
 	mesh->N = N;
 	mesh->sts = sts;
+
+	/* Not supposed to changed by the host, so unmap */
+	buf_unmap(P);
+	buf_unmap(tris_index);
+	buf_unmap(N);
+	buf_unmap(sts);
 }
 
 static int mesh_load(struct scene *scene, const char *file,
@@ -1088,7 +1099,7 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	struct triangle_mesh *mesh;
 
-	mesh = allocate(scene->opencl, sizeof(*mesh));
+	mesh = buf_allocate(scene->opencl, sizeof(*mesh));
 	assert(mesh);
 
 	f = fopen(file, "r");
@@ -1156,6 +1167,9 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	list_add_tail(&mesh->obj.entry, &scene->objects);
 
+	/* Not supposed to changed by the host, so unmap */
+	buf_unmap(mesh);
+
 	return 0;
 }
 
@@ -1176,7 +1190,7 @@ static int objects_create(struct scene *scene)
 	for (; i <= 4; i+= 2, n *= 5, k++) {
 		struct sphere *sphere;
 
-		sphere = allocate(scene->opencl, sizeof(*sphere));
+		sphere = buf_allocate(scene->opencl, sizeof(*sphere));
 		if (!sphere)
 			return -ENOMEM;
 
@@ -1190,6 +1204,9 @@ static int objects_create(struct scene *scene)
 		sphere->obj.Ks = w[k];
 
 		list_add_tail(&sphere->obj.entry, &scene->objects);
+
+		/* Not supposed to changed by the host, so unmap */
+		buf_unmap(sphere);
 	}
 
 	return 0;
@@ -1259,12 +1276,15 @@ static int lights_create(struct scene *scene)
 	color = vec3(1.f, 1.f, 1.f);
 	intensity = 5;
 
-	dlight = allocate(scene->opencl, sizeof(*dlight));
+	dlight = buf_allocate(scene->opencl, sizeof(*dlight));
 	if (!dlight)
 		return -ENOMEM;
 
 	distant_light_init(dlight, &l2w, &color, intensity);
 	list_add_tail(&dlight->light.entry, &scene->lights);
+
+	/* Not supposed to changed by the host, so unmap */
+	buf_unmap(dlight);
 
 	return 0;
 }
@@ -1275,7 +1295,7 @@ static void lights_destroy(struct scene *scene)
 
 	list_for_each_entry_safe(light, tmp, &scene->lights, entry) {
 		list_del(&light->entry);
-		destroy(light);
+		buf_destroy(light);
 	}
 }
 
@@ -1285,10 +1305,12 @@ static struct scene *scene_create(struct opencl *opencl, uint32_t width,
 	struct scene *scene;
 	vec3_t *framebuffer;
 
-	framebuffer = allocate(opencl, width * height * sizeof(*framebuffer));
+	/* Don't mmap by default */
+	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer),
+				     BUF_MAP_READ);
 	assert(framebuffer);
 
-	scene = allocate(opencl, sizeof(*scene));
+	scene = buf_allocate(opencl, sizeof(*scene));
 	assert(scene);
 
 	*scene = (struct scene) {
@@ -1312,8 +1334,74 @@ static void scene_destroy(struct scene *scene)
 {
 	objects_destroy(scene);
 	lights_destroy(scene);
-	destroy(scene->framebuffer);
-	destroy(scene);
+	buf_destroy(scene->framebuffer);
+	buf_destroy(scene);
+}
+
+static void render_soft(struct scene *scene)
+{
+	vec3_t *pix, orig;
+	float scale, img_ratio;
+	uint32_t i, j;
+
+	scale = tan(deg2rad(scene->fov * 0.5));
+	img_ratio = scene->width / (float)scene->height;
+
+	/* Camera position */
+	orig = m4_mul_pos(scene->c2w, vec3(0.f, 0.f, 0.f));
+
+	pix = scene->framebuffer;
+	for (j = 0; j < scene->height; ++j) {
+		for (i = 0; i < scene->width; ++i) {
+			float x = (2 * (i + 0.5) / (float)scene->width - 1) *	img_ratio * scale;
+			float y = (1 - 2 * (j + 0.5) / (float)scene->height) * scale;
+			vec3_t dir;
+
+			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
+			dir = v3_norm(dir);
+
+			*pix = cast_ray(scene, &orig, &dir, 0);
+			pix++;
+		}
+	}
+}
+
+static void render(struct scene *scene)
+{
+	unsigned long long ns;
+	FILE *out;
+	int i, ret;
+
+	ns = nsecs();
+	if (scene->opencl) {
+		opencl_invoke(scene);
+	} else {
+		render_soft(scene);
+	}
+	fprintf(stderr, "\rDone: %.2f (sec)\n", (nsecs() - ns) / 1000000000.0);
+
+	/* save framebuffer to file */
+	out = fopen("yart-out.ppm", "w");
+	assert(out);
+
+	/* Map for reading */
+	ret = buf_map(scene->framebuffer, BUF_MAP_READ);
+	assert(!ret);
+
+	fprintf(out, "P6\n%d %d\n255\n", scene->width, scene->height);
+	for (i = 0; i < scene->height * scene->width; ++i) {
+		char r = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].x));
+		char g = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].y));
+		char b = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].z));
+
+		fprintf(out, "%c%c%c", r, g, b);
+	}
+	fclose(out);
+
+	/* Unmap */
+	ret = buf_unmap(scene->framebuffer);
+	assert(!ret);
+
 }
 
 int main(int argc, char **argv)
@@ -1349,6 +1437,9 @@ int main(int argc, char **argv)
 	/* Init default light */
 	ret = lights_create(scene);
 	assert(!ret);
+
+	/* Unmap scene */
+	buf_unmap(scene);
 
 	/* Finally render */
 	render(scene);
