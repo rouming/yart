@@ -15,6 +15,8 @@
 #define CL_TARGET_OPENCL_VERSION 220
 #include <CL/cl.h>
 
+#define __global
+
 #else /* __OPENCL__ */
 
 #define sinf  sin
@@ -52,7 +54,7 @@ typedef int          int32_t;
 
 #define EPSILON 1e-8
 
-struct opencl_ctx;
+struct opencl;
 
 struct scene {
 	uint32_t width;
@@ -62,7 +64,8 @@ struct scene {
 	mat4_t   c2w;
 	float    bias;
 	uint32_t max_depth;
-	struct opencl_ctx *opencl_ctx;
+	__global vec3_t   *framebuffer;
+	struct opencl *opencl;
 
 	struct list_head objects;
 	struct list_head lights;
@@ -70,44 +73,41 @@ struct scene {
 
 #ifndef __OPENCL__
 
-struct opencl_ctx {
+struct opencl {
 	cl_context       context;
 	cl_device_id     device_id;
 	cl_command_queue queue;
 	cl_program       program;
 	cl_kernel        kernel;
-	cl_mem           scene_dev;
 	uint32_t         global_item_size;
 };
 
-static inline void *allocate(struct scene *scene, size_t sz)
+static inline void *allocate(struct opencl *opencl, size_t sz)
 {
 	void *ptr;
 
 	sz += 8;
-
-	if (scene->opencl_ctx) {
-		ptr = clSVMAlloc(scene->opencl_ctx->context,
-				 CL_MEM_READ_WRITE, sz, 0);
+	if (opencl) {
+		ptr = clSVMAlloc(opencl->context, CL_MEM_READ_WRITE, sz, 0);
 	} else {
 		ptr = malloc(sz);
 	}
 	if (!ptr)
 		return ptr;
 
-	*(struct scene **)ptr = scene;
+	*(struct opencl **)ptr = opencl;
 
 	return ptr + 8;
 }
 
 static inline void destroy(void *ptr)
 {
-	struct scene *scene;
+	struct opencl *opencl;
 
 	ptr -= 8;
-	scene = *(struct scene **)ptr;
-	if (scene->opencl_ctx) {
-		clSVMFree(scene->opencl_ctx->context, ptr);
+	opencl = *(struct opencl **)ptr;
+	if (opencl) {
+		clSVMFree(opencl->context, ptr);
 	} else {
 		free(ptr);
 	}
@@ -163,9 +163,9 @@ struct object;
 
 struct object_ops {
 	void (*destroy)(struct object *obj);
-	bool (*intersect)(struct object *obj, const vec3_t *orig, const vec3_t *dir,
+	bool (*intersect)(__global struct object *obj, const vec3_t *orig, const vec3_t *dir,
 			  float *near, uint32_t *index, vec2_t *uv);
-	void (*get_surface_props)(struct object *obj, const vec3_t *hit_point,
+	void (*get_surface_props)(__global struct object *obj, const vec3_t *hit_point,
 				  const vec3_t *dir, uint32_t index, const vec2_t *uv,
 				  vec3_t *hit_normal,
 				  vec2_t *hit_tex_coords);
@@ -190,11 +190,13 @@ struct sphere {
 	vec3_t center;
 };
 
-static bool sphere_intersect(struct object *obj, const vec3_t *orig,
+static bool sphere_intersect(__global struct object *obj, const vec3_t *orig,
 			     const vec3_t *dir, float *near, uint32_t *index,
 			     vec2_t *uv)
 {
-	struct sphere *sphere = container_of(obj, struct sphere, obj);
+	__global struct sphere *sphere;
+
+	sphere = container_of(obj, typeof(*sphere), obj);
 
 	/* not used in sphere */
 	*index = 0;
@@ -226,12 +228,15 @@ static bool sphere_intersect(struct object *obj, const vec3_t *orig,
 	return true;
 }
 
-static void sphere_get_surface_props(struct object *obj, const vec3_t *hit_point,
+static void sphere_get_surface_props(__global struct object *obj,
+				     const vec3_t *hit_point,
 				     const vec3_t *dir, uint32_t index,
 				     const vec2_t *uv, vec3_t *hit_normal,
 				     vec2_t *hit_tex_coords)
 {
-	struct sphere *sphere = container_of(obj, struct sphere, obj);
+	__global struct sphere *sphere;
+
+	sphere = container_of(obj, typeof(*sphere), obj);
 
 	*hit_normal = v3_norm(v3_sub(*hit_point, sphere->center));
 
@@ -247,18 +252,21 @@ static void sphere_get_surface_props(struct object *obj, const vec3_t *hit_point
 }
 
 struct triangle_mesh {
-	struct object obj;
-	uint32_t num_tris;       /* number of triangles */
-	vec3_t   *P;             /* triangles vertex position */
-	uint32_t *tris_index;    /* vertex index array */
-	vec3_t   *N;             /* triangles vertex normals */
-	vec2_t   *sts;           /* triangles texture coordinates */
-	bool     smooth_shading; /* smooth shading */
+	struct object     obj;
+	bool              smooth_shading; /* smooth shading */
+	uint32_t          num_tris;       /* number of triangles */
+	__global vec3_t   *P;             /* triangles vertex position */
+	__global uint32_t *tris_index;    /* vertex index array */
+	__global vec3_t   *N;             /* triangles vertex normals */
+	__global vec2_t   *sts;           /* triangles texture coordinates */
 };
 
-static bool triangle_intersect(const vec3_t *orig, const vec3_t *dir,
-			       const vec3_t *v0, const vec3_t *v1, const vec3_t *v2,
-			       float *t, float *u, float *v)
+static bool
+triangle_intersect(const vec3_t *orig, const vec3_t *dir,
+		   __global const vec3_t *v0,
+		   __global const vec3_t *v1,
+		   __global const vec3_t *v2,
+		   float *t, float *u, float *v)
 {
 	vec3_t v0v1 = v3_sub(*v1, *v0);
 	vec3_t v0v2 = v3_sub(*v2, *v0);
@@ -289,22 +297,23 @@ static bool triangle_intersect(const vec3_t *orig, const vec3_t *dir,
 	return (*t > 0);
 }
 
-static bool triangle_mesh_intersect(struct object *obj, const vec3_t *orig,
-				    const vec3_t *dir, float *near, uint32_t *index,
-				    vec2_t *uv)
+static bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *orig,
+				    const vec3_t *dir, float *near,
+				    uint32_t *index, vec2_t *uv)
 {
-	struct triangle_mesh *mesh =
-		container_of(obj, struct triangle_mesh, obj);
+	__global struct triangle_mesh *mesh;
 
 	uint32_t j, i;
         bool isect;
 
+	mesh = container_of(obj, typeof(*mesh), obj);
+
 	isect = false;
         for (i = 0, j = 0; i < mesh->num_tris; i++) {
-		const vec3_t *P = mesh->P;
-		const vec3_t *v0 = &P[mesh->tris_index[j + 0]];
-		const vec3_t *v1 = &P[mesh->tris_index[j + 1]];
-		const vec3_t *v2 = &P[mesh->tris_index[j + 2]];
+		__global const vec3_t *P = mesh->P;
+		__global const vec3_t *v0 = &P[mesh->tris_index[j + 0]];
+		__global const vec3_t *v1 = &P[mesh->tris_index[j + 1]];
+		__global const vec3_t *v2 = &P[mesh->tris_index[j + 2]];
 		float t = INFINITY, u, v;
 
 		if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
@@ -321,20 +330,20 @@ static bool triangle_mesh_intersect(struct object *obj, const vec3_t *orig,
         return isect;
 }
 
-static void triangle_mesh_get_surface_props(struct object *obj, const vec3_t *hit_point,
+static void triangle_mesh_get_surface_props(__global struct object *obj,
+					    const vec3_t *hit_point,
 					    const vec3_t *dir, uint32_t index,
 					    const vec2_t *uv, vec3_t *hit_normal,
 					    vec2_t *hit_tex_coords)
 {
-	struct triangle_mesh *mesh =
-		container_of(obj, struct triangle_mesh, obj);
-
+	__global struct triangle_mesh *mesh;
+	__global const vec2_t *sts;
 	vec2_t st0, st1, st2;
-	const vec2_t *sts;
 
+	mesh = container_of(obj, typeof(*mesh), obj);
 	if (mesh->smooth_shading) {
 		/* vertex normal */
-		const vec3_t *N = mesh->N;
+		__global const vec3_t *N = mesh->N;
 		vec3_t n0 = N[index * 3 + 0];
 		vec3_t n1 = N[index * 3 + 1];
 		vec3_t n2 = N[index * 3 + 2];
@@ -347,7 +356,7 @@ static void triangle_mesh_get_surface_props(struct object *obj, const vec3_t *hi
         }
         else {
 		/* face normal */
-		const vec3_t *P = mesh->P;
+		__global const vec3_t *P = mesh->P;
 		vec3_t v0 = P[mesh->tris_index[index * 3 + 0]];
 		vec3_t v1 = P[mesh->tris_index[index * 3 + 1]];
 		vec3_t v2 = P[mesh->tris_index[index * 3 + 2]];
@@ -374,13 +383,13 @@ static void triangle_mesh_get_surface_props(struct object *obj, const vec3_t *hi
 	st1 = v2_muls(st1, uv->x);
 	st2 = v2_muls(st2, uv->y);
 
-        *hit_tex_coords = v2_add(st2, v2_add(st0, st1));
+	*hit_tex_coords = v2_add(st2, v2_add(st0, st1));
 }
 
 struct light;
 
 struct light_ops {
-	void (*illuminate)(struct light *light, const vec3_t *orig,
+	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
 };
 
@@ -397,11 +406,12 @@ struct distant_light {
 	vec3_t dir;
 };
 
-static void distant_light_illuminate(struct light *light, const vec3_t *orig,
+static void distant_light_illuminate(__global struct light *light, const vec3_t *orig,
 				     vec3_t *dir, vec3_t *intensity, float *distance)
 {
-	struct distant_light *dlight =
-		container_of(light, struct distant_light, light);
+	__global struct distant_light *dlight;
+
+	dlight = container_of(light, typeof(*dlight), light);
 
 	*dir = dlight->dir;
 	*intensity = v3_muls(dlight->light.color, dlight->light.intensity);
@@ -413,12 +423,13 @@ struct point_light {
 	vec3_t pos;
 };
 
-static void point_light_illuminate(struct light *light, const vec3_t *orig,
+static void point_light_illuminate(__global struct light *light, const vec3_t *orig,
 				   vec3_t *dir, vec3_t *intensity, float *distance)
 {
-	struct point_light *plight =
-		container_of(light, struct point_light, light);
+	__global struct point_light *plight;
 	float r_pow2;
+
+	plight = container_of(light, typeof(*plight), light);
 
         *dir = v3_sub(*orig, plight->pos);
         r_pow2 = v3_dot(*dir, *dir);
@@ -431,22 +442,82 @@ static void point_light_illuminate(struct light *light, const vec3_t *orig,
 	*intensity = v3_divs(*intensity, 4 * M_PI * r_pow2);
 }
 
+static inline bool
+object_intersect(__global struct object *obj, const vec3_t *orig,
+		 const vec3_t *dir, float *near, uint32_t *index,
+		 vec2_t *uv)
+{
+#ifndef __OPENCL__
+	return obj->ops.intersect(obj, orig, dir, near, index, uv);
+#else
+	/* OpenCL does not support function pointers, se la vie  */
+	if (obj->ops.intersect == &sphere_intersect) {
+		return sphere_intersect(obj, orig, dir, near, index, uv);
+	} else if (obj->ops.intersect == &triangle_mesh_intersect) {
+		return triangle_mesh_intersect(obj, orig, dir, near, index, uv);
+	} else {
+		/* Hm .. */
+		return false;
+	}
+#endif
+}
+
+static inline void
+object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
+			 const vec3_t *dir, uint32_t index, const vec2_t *uv,
+			 vec3_t *hit_normal, vec2_t *hit_tex_coords)
+{
+#ifndef __OPENCL__
+	obj->ops.get_surface_props(obj, hit_point, dir, index,
+				   uv, hit_normal, hit_tex_coords);
+#else
+	/* OpenCL does not support function pointers, se la vie  */
+	if (obj->ops.get_surface_props == &sphere_get_surface_props) {
+		sphere_get_surface_props(obj, hit_point, dir, index,
+					 uv, hit_normal, hit_tex_coords);
+	} else if (obj->ops.get_surface_props == &triangle_mesh_get_surface_props) {
+		triangle_mesh_get_surface_props(obj, hit_point, dir, index,
+						uv, hit_normal, hit_tex_coords);
+	} else {
+		/* Hm .. */
+	}
+#endif
+}
+
+static inline void
+light_illuminate(__global struct light *light, const vec3_t *orig,
+		 vec3_t *dir, vec3_t *intensity, float *distance)
+{
+#ifndef __OPENCL__
+	light->ops.illuminate(light, orig, dir, intensity, distance);
+#else
+	/* OpenCL does not support function pointers, se la vie  */
+	if (light->ops.illuminate == &distant_light_illuminate) {
+		distant_light_illuminate(light, orig, dir, intensity, distance);
+	} else if (light->ops.illuminate == &point_light_illuminate) {
+		point_light_illuminate(light, orig, dir, intensity, distance);
+	} else {
+		/* Hm .. */
+	}
+#endif
+}
+
 enum ray_type {
 	PRIMARY_RAY,
 	SHADOW_RAY
 };
 
 struct intersection {
-	struct object *hit_object;
+	__global struct object *hit_object;
 	float near;
 	vec2_t uv;
 	uint32_t index;
 };
 
-static bool trace(struct scene *scene, const vec3_t *orig, const vec3_t *dir,
+static bool trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 		  struct intersection *isect, enum ray_type ray_type)
 {
-	struct object *obj;
+	__global struct object *obj;
 
 	isect->hit_object = NULL;
 	isect->near = INFINITY;
@@ -456,7 +527,7 @@ static bool trace(struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 		uint32_t index = 0;
 		vec2_t uv;
 
-		if (obj->ops.intersect(obj, orig, dir, &near, &index, &uv) &&
+		if (object_intersect(obj, orig, dir, &near, &index, &uv) &&
 		    near < isect->near) {
 			isect->hit_object = obj;
 			isect->near = near;
@@ -542,8 +613,8 @@ static void fresnel(const vec3_t *I, const vec3_t *N, float ior, float *kr)
 	 */
 }
 
-static vec3_t cast_ray(struct scene *scene, const vec3_t *orig, const vec3_t *dir,
-		       uint32_t depth)
+static vec3_t cast_ray(__global struct scene *scene, const vec3_t *orig,
+		       const vec3_t *dir, uint32_t depth)
 {
 	struct intersection isect;
 	vec3_t hit_color;
@@ -559,12 +630,9 @@ static vec3_t cast_ray(struct scene *scene, const vec3_t *orig, const vec3_t *di
 		vec2_t hit_tex_coords;
 
 		hit_point = v3_add(v3_muls(*dir, isect.near), *orig);
-		isect.hit_object->ops.get_surface_props(isect.hit_object,
-							&hit_point, dir,
-							isect.index,
-							&isect.uv,
-							&hit_normal,
-							&hit_tex_coords);
+		object_get_surface_props(isect.hit_object, &hit_point, dir,
+					 isect.index, &isect.uv,
+					 &hit_normal, &hit_tex_coords);
 		switch (isect.hit_object->material) {
 		case MATERIAL_PHONG: {
 			/*
@@ -572,7 +640,7 @@ static vec3_t cast_ray(struct scene *scene, const vec3_t *orig, const vec3_t *di
 			 * and accumulate their contribution)
 			 */
 			vec3_t diffuse, specular;
-			struct light *light;
+			__global struct light *light;
 
 			diffuse = specular = vec3(0.0f, 0.0f, 0.0f);
 
@@ -585,8 +653,8 @@ static vec3_t cast_ray(struct scene *scene, const vec3_t *orig, const vec3_t *di
 				float near, p;
 				bool obstacle;
 
-				light->ops.illuminate(light, &hit_point, &light_dir,
-						      &light_intensity, &near);
+				light_illuminate(light, &hit_point, &light_dir,
+						 &light_intensity, &near);
 
 				point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
 				rev_light_dir = v3_muls(light_dir, -1.0f);
@@ -634,10 +702,7 @@ static vec3_t cast_ray(struct scene *scene, const vec3_t *orig, const vec3_t *di
 
 #ifdef __OPENCL__
 
-__kernel void render_opencl(__global const struct scene *scene,
-			    __global vec3_t *framebuffer,
-			    __global struct object *objects,
-			    __global struct light *lights)
+__kernel void render_opencl(__global struct scene *scene)
 {
 	float x, y, scale, img_ratio;
 	vec3_t orig, dir;
@@ -659,7 +724,7 @@ __kernel void render_opencl(__global const struct scene *scene,
 	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
 	dir = v3_norm(dir);
 
-	framebuffer[i] = cast_ray(scene, &orig, &dir, 0);
+	scene->framebuffer[i] = cast_ray(scene, &orig, &dir, 0);
 }
 
 #else /* !__OPENCL__ */
@@ -715,12 +780,7 @@ static void render(struct scene *scene)
 	free(buffer);
 }
 
-static int opencl_init(struct scene *scene,
-		       vec3_t *framebuffer,
-		       struct object *objects,
-		       struct light *lights,
-		       const char *kernel_fn,
-		       struct opencl_ctx *ctx)
+static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 {
 	/* Load current file */
 	const char *path = __FILE__;
@@ -733,12 +793,10 @@ static int opencl_init(struct scene *scene,
 	cl_context context;
 	cl_program program;
 	cl_kernel kernel;
-	cl_mem scene_dev;
 	cl_int ret;
 
 	size_t size, read;
 	char *source;
-	void *buf;
 	FILE *fp;
 
 	fp = fopen(path, "r");
@@ -770,11 +828,6 @@ static int opencl_init(struct scene *scene,
 	/* Create a command queue */
 	queue = clCreateCommandQueueWithProperties(context, device_id, NULL, &ret);
 	assert(!ret);
-
-	/* Create memory buffers on the device for each vector */
-	buf = clSVMAlloc(context, CL_MEM_WRITE_ONLY,
-			 scene->width * scene->height * sizeof(*buf), 0);
-	assert(buf);
 
 	/* Create a program from the kernel source */
 	program = clCreateProgramWithSource(context, 1, (const char **)&source,
@@ -816,23 +869,49 @@ static int opencl_init(struct scene *scene,
 	kernel = clCreateKernel(program, kernel_fn, &ret);
 	assert(!ret);
 
+	/* Init context */
+	opencl->context = context;
+	opencl->device_id = device_id;
+	opencl->queue = queue;
+	opencl->program = program;
+	opencl->kernel = kernel;
+
+	return 0;
+}
+
+static void opencl_deinit(struct opencl *opencl)
+{
+	if (!opencl)
+		return;
+
+	clReleaseKernel(opencl->kernel);
+	clReleaseProgram(opencl->program);
+	clReleaseCommandQueue(opencl->queue);
+	clReleaseContext(opencl->context);
+}
+
+#if 0
+static int opencl_prepare(struct opencl_ctx *ctx, struct scene *scene)
+{
 	/* Map a scene pointer to the device */
-	scene_dev = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
-				   sizeof(*scene), scene, &ret);
-	assert(!ret);
+//	scene_dev = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
+//				   sizeof(*scene), scene, &ret);
+//	assert(!ret);
 
 	/* Set the arguments of the kernel */
-	ret = clSetKernelArg(kernel, 0, sizeof(scene_dev), &scene_dev);
-	assert(!ret);
+//	ret = clSetKernelArg(kernel, 0, sizeof(scene_dev), &scene_dev);
+//	assert(!ret);
+	/* XXX
 	ret = clSetKernelArgSVMPointer(kernel, 1, framebuffer);
 	assert(!ret);
 	ret = clSetKernelArgSVMPointer(kernel, 2, objects);
 	assert(!ret);
 	ret = clSetKernelArgSVMPointer(kernel, 3, lights);
 	assert(!ret);
+	*/
 
 	/* Init context */
-	ctx->scene_dev = scene_dev;
+//	ctx->scene_dev = scene_dev;
 	ctx->context = context;
 	ctx->device_id = device_id;
 	ctx->queue = queue;
@@ -844,26 +923,20 @@ static int opencl_init(struct scene *scene,
 
 	return 0;
 }
+#endif
 
-static void opencl_deinit(struct opencl_ctx *ctx)
+static int opencl_invoke(struct scene *scene)
 {
-	if (!ctx)
-		return;
-
-	clReleaseMemObject(ctx->scene_dev);
-	clReleaseKernel(ctx->kernel);
-	clReleaseProgram(ctx->program);
-	clReleaseCommandQueue(ctx->queue);
-	clReleaseContext(ctx->context);
-}
-
-static int opencl_invoke(struct opencl_ctx *ctx)
-{
-	size_t global_item_size = ctx->global_item_size;
+	struct opencl *opencl = scene->opencl;
+	size_t global_item_size = opencl->global_item_size;
 	/* Divide work items into groups of 64 */
 	size_t local_item_size = 64;
+	int ret;
 
-	return clEnqueueNDRangeKernel(ctx->queue, ctx->kernel, 1, NULL,
+	ret = clSetKernelArgSVMPointer(opencl->kernel, 0, scene);
+	assert(!ret);
+
+	return clEnqueueNDRangeKernel(opencl->queue, opencl->kernel, 1, NULL,
 				      &global_item_size,
 				      &local_item_size, 0,
 				      NULL, NULL);
@@ -948,20 +1021,20 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
         max_vert_index += 1;
 
 	/* allocate memory to store the position of the mesh vertices */
-        P = allocate(scene, max_vert_index * sizeof(*P));
+        P = allocate(scene->opencl, max_vert_index * sizeof(*P));
 	assert(P);
 
 	/* Transform vertices to world space */
         for (i = 0; i < max_vert_index; ++i)
 		P[i] = m4_mul_pos(*o2w, verts[i]);
 
-	tris_index = allocate(scene, num_tris * 3 * sizeof(*tris_index));
+	tris_index = allocate(scene->opencl, num_tris * 3 * sizeof(*tris_index));
 	assert(tris_index);
 
-	N = allocate(scene, num_tris * 3 * sizeof(*N));
+	N = allocate(scene->opencl, num_tris * 3 * sizeof(*N));
 	assert(N);
 
-	sts = allocate(scene, num_tris * 3 * sizeof(*sts));
+	sts = allocate(scene->opencl, num_tris * 3 * sizeof(*sts));
 	assert(sts);
 
 	/* Init object */
@@ -1015,7 +1088,7 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	struct triangle_mesh *mesh;
 
-	mesh = allocate(scene, sizeof(*mesh));
+	mesh = allocate(scene->opencl, sizeof(*mesh));
 	assert(mesh);
 
 	f = fopen(file, "r");
@@ -1103,7 +1176,7 @@ static int objects_create(struct scene *scene)
 	for (; i <= 4; i+= 2, n *= 5, k++) {
 		struct sphere *sphere;
 
-		sphere = allocate(scene, sizeof(*sphere));
+		sphere = allocate(scene->opencl, sizeof(*sphere));
 		if (!sphere)
 			return -ENOMEM;
 
@@ -1156,13 +1229,14 @@ static void distant_light_init(struct distant_light *dlight, const mat4_t *l2w,
 	dlight->dir = v3_norm(dir);
 }
 
+struct light_ops point_light_ops = {
+	.illuminate = point_light_illuminate
+};
+
 __attribute__((unused))
 static void point_light_init(struct point_light *plight, const mat4_t *l2w,
 			     const vec3_t *color, float intensity)
 {
-	struct light_ops point_light_ops = {
-		.illuminate = point_light_illuminate
-	};
 	light_init(&plight->light, &point_light_ops, l2w, color, intensity);
 	plight->pos = m4_mul_pos(*l2w, vec3(0.0f, 0.0f, 0.0f));
 }
@@ -1185,7 +1259,7 @@ static int lights_create(struct scene *scene)
 	color = vec3(1.f, 1.f, 1.f);
 	intensity = 5;
 
-	dlight = allocate(scene, sizeof(*dlight));
+	dlight = allocate(scene->opencl, sizeof(*dlight));
 	if (!dlight)
 		return -ENOMEM;
 
@@ -1205,68 +1279,82 @@ static void lights_destroy(struct scene *scene)
 	}
 }
 
-static void scene_init(struct scene *scene)
+static struct scene *scene_create(struct opencl *opencl, uint32_t width,
+				  uint32_t height, float fov)
 {
+	struct scene *scene;
+	vec3_t *framebuffer;
+
+	framebuffer = allocate(opencl, width * height * sizeof(*framebuffer));
+	assert(framebuffer);
+
+	scene = allocate(opencl, sizeof(*scene));
+	assert(scene);
+
 	*scene = (struct scene) {
-		.width        = 640,
-		.height       = 480,
-		.fov          = 90,
+		.width        = width,
+		.height       = height,
+		.fov          = fov,
 		.back_color   = {0.235294f, 0.67451f, 0.843137f},
 		.c2w          = m4_identity(),
 		.bias         = 0.0001,
+		.opencl       = opencl,
 		.max_depth    = 5,
+		.framebuffer  = framebuffer,
 		.objects      = LIST_HEAD_INIT(scene->objects),
 		.lights       = LIST_HEAD_INIT(scene->lights),
 	};
+
+	return scene;
 };
 
-static void scene_deinit(struct scene *scene)
+static void scene_destroy(struct scene *scene)
 {
-	opencl_deinit(scene->opencl_ctx);
 	objects_destroy(scene);
 	lights_destroy(scene);
+	destroy(scene->framebuffer);
+	destroy(scene);
 }
 
 int main(int argc, char **argv)
 {
-	bool use_opencl = false;
+	struct opencl __opencl, *opencl = NULL;
+	struct scene *scene;
+
+	uint32_t width = 1024;
+	uint32_t height = 768;
+
 	int ret;
 
-	struct opencl_ctx ctx;
-	struct scene scene;
-
-	if (argc > 1)
-		use_opencl = !strcmp("opencl", argv[1]);
-
-	/* Init scene */
-	scene_init(&scene);
-	scene.fov = 36.87;
-	scene.width = 1024;
-	scene.height = 747;
-
-	/* Camera position */
-	scene.c2w.m32 = 12;
-	scene.c2w.m31 = 1;
-
-	if (use_opencl) {
+	if (argc > 1 && !strcmp("opencl", argv[1])) {
 		/* Init opencl context */
-		ret = opencl_init(&scene, NULL, NULL, NULL,
-				  "render_opencl", &ctx);
+		opencl = &__opencl;
+		ret = opencl_init(opencl, "render_opencl");
 		if (ret)
 			return -1;
 	}
 
+	/* Create scene */
+	scene = scene_create(opencl, width, height, 36.87f);
+	assert(scene);
+
+	/* Camera position */
+	scene->c2w.m32 = 12;
+	scene->c2w.m31 = 1;
+
 	/* Init default objects */
-	ret = objects_create(&scene);
+	ret = objects_create(scene);
 	assert(!ret);
 
 	/* Init default light */
-	lights_create(&scene);
+	ret = lights_create(scene);
+	assert(!ret);
 
 	/* Finally render */
-	render(&scene);
+	render(scene);
 
-	scene_deinit(&scene);
+	scene_destroy(scene);
+	opencl_deinit(opencl);
 
 	return 0;
 }
