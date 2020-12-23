@@ -142,7 +142,7 @@ static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
 
 static void *buf_allocate(struct opencl *opencl, size_t sz)
 {
-	return __buf_allocate(opencl, sz, BUF_ZERO | BUF_MAP_WRITE | BUF_MAP_READ);
+	return __buf_allocate(opencl, sz, BUF_ZERO | BUF_MAP_WRITE);
 }
 
 static void buf_destroy(void *ptr)
@@ -789,7 +789,7 @@ __kernel void render_opencl(__global struct scene *scene)
 	vec3_t orig, dir;
 	uint32_t i, ix, iy;
 
-	scale = tan(deg2rad(scene->fov * 0.5));
+	scale = tan(deg2rad(scene->fov * 0.5f));
 	img_ratio = scene->width / (float)scene->height;
 
 	/* Camera position */
@@ -799,10 +799,10 @@ __kernel void render_opencl(__global struct scene *scene)
 	iy = i / scene->width;
 	ix = i % scene->width;
 
-	x = (2 * (ix + 0.5) / (float)scene->width - 1) * img_ratio * scale;
-	y = (1 - 2 * (iy + 0.5) / (float)scene->height) * scale;
+	x = (2.0f * (ix + 0.5f) / (float)scene->width - 1.0f) * img_ratio * scale;
+	y = (1.0f - 2.0f * (iy + 0.5f) / (float)scene->height) * scale;
 
-	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
+	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 	dir = v3_norm(dir);
 
 	scene->framebuffer[i] = cast_ray(scene, &orig, &dir, 0);
@@ -1306,8 +1306,7 @@ static struct scene *scene_create(struct opencl *opencl, uint32_t width,
 	vec3_t *framebuffer;
 
 	/* Don't mmap by default */
-	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer),
-				     BUF_MAP_READ);
+	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer), 0);
 	assert(framebuffer);
 
 	scene = buf_allocate(opencl, sizeof(*scene));
@@ -1438,7 +1437,7 @@ int main(int argc, char **argv)
 	ret = lights_create(scene);
 	assert(!ret);
 
-	/* Unmap scene */
+	/* Unmap scene, should be just before render */
 	buf_unmap(scene);
 
 	/* Finally render */
