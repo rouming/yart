@@ -207,7 +207,7 @@ static inline float clamp(float lo, float hi, float v)
 	return MAX(lo, MIN(hi, v));
 }
 
-#endif
+#endif /* !__OPENCL__ */
 
 static inline float deg2rad(float deg)
 {
@@ -236,6 +236,17 @@ static inline bool solve_quadratic(float a, float b, float c, float *x0, float *
 	return true;
 }
 
+enum ops_type {
+	SPHERE_INTERSECT,
+	SPHERE_GET_SURFACE_PROPS,
+
+	TRIANGLE_MESH_INTERSECT,
+	TRIANGLE_MESH_GET_SURFACE_PROPS,
+
+	DISTANT_LIGHT_ILLUMINATE,
+	POINT_LIGHT_ILLUMINATE,
+};
+
 enum material_type {
 	MATERIAL_PHONG
 };
@@ -250,6 +261,10 @@ struct object_ops {
 				  const vec3_t *dir, uint32_t index, const vec2_t *uv,
 				  vec3_t *hit_normal,
 				  vec2_t *hit_tex_coords);
+
+	/* Required for OpenCL "virtual" calls */
+	enum ops_type intersect_type;
+	enum ops_type get_surface_props_type;
 };
 
 struct object {
@@ -472,6 +487,9 @@ struct light;
 struct light_ops {
 	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
+
+	/* Required for OpenCL "virtual" calls */
+	enum ops_type illuminate_type;
 };
 
 struct light {
@@ -532,11 +550,12 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 	return obj->ops.intersect(obj, orig, dir, near, index, uv);
 #else
 	/* OpenCL does not support function pointers, se la vie  */
-	if (obj->ops.intersect == &sphere_intersect) {
+	switch (obj->ops.intersect_type) {
+	case SPHERE_INTERSECT:
 		return sphere_intersect(obj, orig, dir, near, index, uv);
-	} else if (obj->ops.intersect == &triangle_mesh_intersect) {
+	case TRIANGLE_MESH_INTERSECT:
 		return triangle_mesh_intersect(obj, orig, dir, near, index, uv);
-	} else {
+	default:
 		/* Hm .. */
 		return false;
 	}
@@ -553,14 +572,18 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 				   uv, hit_normal, hit_tex_coords);
 #else
 	/* OpenCL does not support function pointers, se la vie  */
-	if (obj->ops.get_surface_props == &sphere_get_surface_props) {
+	switch (obj->ops.get_surface_props_type) {
+	case SPHERE_GET_SURFACE_PROPS:
 		sphere_get_surface_props(obj, hit_point, dir, index,
 					 uv, hit_normal, hit_tex_coords);
-	} else if (obj->ops.get_surface_props == &triangle_mesh_get_surface_props) {
+		return;
+	case TRIANGLE_MESH_GET_SURFACE_PROPS:
 		triangle_mesh_get_surface_props(obj, hit_point, dir, index,
 						uv, hit_normal, hit_tex_coords);
-	} else {
+		return;
+	default:
 		/* Hm .. */
+		return;
 	}
 #endif
 }
@@ -573,12 +596,16 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 	light->ops.illuminate(light, orig, dir, intensity, distance);
 #else
 	/* OpenCL does not support function pointers, se la vie  */
-	if (light->ops.illuminate == &distant_light_illuminate) {
+	switch (light->ops.illuminate_type) {
+	case DISTANT_LIGHT_ILLUMINATE:
 		distant_light_illuminate(light, orig, dir, intensity, distance);
-	} else if (light->ops.illuminate == &point_light_illuminate) {
+		return;
+	case POINT_LIGHT_ILLUMINATE:
 		point_light_illuminate(light, orig, dir, intensity, distance);
-	} else {
+		return;
+	default:
 		/* Hm .. */
+		return;
 	}
 #endif
 }
@@ -694,7 +721,7 @@ static void fresnel(const vec3_t *I, const vec3_t *N, float ior, float *kr)
 	 */
 }
 
-static vec3_t cast_ray(__global struct scene *scene, const vec3_t *orig,
+static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		       const vec3_t *dir, uint32_t depth)
 {
 	struct intersection isect;
@@ -805,7 +832,7 @@ __kernel void render_opencl(__global struct scene *scene)
 	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 	dir = v3_norm(dir);
 
-	scene->framebuffer[i] = cast_ray(scene, &orig, &dir, 0);
+	scene->framebuffer[i] = ray_cast(scene, &orig, &dir, 0);
 }
 
 #else /* !__OPENCL__ */
@@ -969,8 +996,10 @@ static void object_destroy(struct object *obj)
 }
 
 struct object_ops sphere_ops = {
-	.intersect         = sphere_intersect,
-	.get_surface_props = sphere_get_surface_props
+	.intersect              = sphere_intersect,
+	.intersect_type         = SPHERE_INTERSECT,
+	.get_surface_props      = sphere_get_surface_props,
+	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
 static void sphere_init(struct sphere *sphere, const mat4_t *o2w, float radius)
@@ -995,9 +1024,12 @@ static void triangle_mesh_destroy(struct object *obj)
 }
 
 struct object_ops triangle_mesh_ops = {
-	.destroy           = triangle_mesh_destroy,
-	.intersect         = triangle_mesh_intersect,
-	.get_surface_props = triangle_mesh_get_surface_props
+	.destroy                = triangle_mesh_destroy,
+	.intersect              = triangle_mesh_intersect,
+	.intersect_type         = TRIANGLE_MESH_INTERSECT,
+	.get_surface_props      = triangle_mesh_get_surface_props,
+	.get_surface_props_type = TRIANGLE_MESH_GET_SURFACE_PROPS,
+
 };
 
 static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
@@ -1231,7 +1263,8 @@ static void light_init(struct light *light, struct light_ops *ops,
 }
 
 struct light_ops distant_light_ops = {
-	.illuminate = distant_light_illuminate
+	.illuminate      = distant_light_illuminate,
+	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
 };
 
 static void distant_light_init(struct distant_light *dlight, const mat4_t *l2w,
@@ -1247,7 +1280,8 @@ static void distant_light_init(struct distant_light *dlight, const mat4_t *l2w,
 }
 
 struct light_ops point_light_ops = {
-	.illuminate = point_light_illuminate
+	.illuminate      = point_light_illuminate,
+	.illuminate_type = POINT_LIGHT_ILLUMINATE,
 };
 
 __attribute__((unused))
@@ -1359,8 +1393,9 @@ static void render_soft(struct scene *scene)
 			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
 			dir = v3_norm(dir);
 
-			*pix = cast_ray(scene, &orig, &dir, 0);
+			*pix = ray_cast(scene, &orig, &dir, 0);
 			pix++;
+
 		}
 	}
 }
