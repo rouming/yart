@@ -255,6 +255,7 @@ struct object;
 
 struct object_ops {
 	void (*destroy)(struct object *obj);
+	int (*unmap)(struct object *obj);
 	bool (*intersect)(__global struct object *obj, const vec3_t *orig, const vec3_t *dir,
 			  float *near, uint32_t *index, vec2_t *uv);
 	void (*get_surface_props)(__global struct object *obj, const vec3_t *hit_point,
@@ -485,6 +486,7 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 struct light;
 
 struct light_ops {
+	int (*unmap)(struct light *light);
 	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
 
@@ -995,7 +997,16 @@ static void object_destroy(struct object *obj)
 		obj->ops.destroy(obj);
 }
 
+static int sphere_unmap(struct object *obj)
+{
+	struct sphere *sphere =
+		container_of(obj, struct sphere, obj);
+
+	return buf_unmap(sphere);
+}
+
 struct object_ops sphere_ops = {
+	.unmap                  = sphere_unmap,
 	.intersect              = sphere_intersect,
 	.intersect_type         = SPHERE_INTERSECT,
 	.get_surface_props      = sphere_get_surface_props,
@@ -1023,8 +1034,17 @@ static void triangle_mesh_destroy(struct object *obj)
 	buf_destroy(mesh);
 }
 
+static int triangle_mesh_unmap(struct object *obj)
+{
+	struct triangle_mesh *mesh =
+		container_of(obj, struct triangle_mesh, obj);
+
+	return buf_unmap(mesh);
+}
+
 struct object_ops triangle_mesh_ops = {
 	.destroy                = triangle_mesh_destroy,
+	.unmap                  = triangle_mesh_unmap,
 	.intersect              = triangle_mesh_intersect,
 	.intersect_type         = TRIANGLE_MESH_INTERSECT,
 	.get_surface_props      = triangle_mesh_get_surface_props,
@@ -1199,9 +1219,6 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	list_add_tail(&mesh->obj.entry, &scene->objects);
 
-	/* Not supposed to changed by the host, so unmap */
-	buf_unmap(mesh);
-
 	return 0;
 }
 
@@ -1236,9 +1253,6 @@ static int objects_create(struct scene *scene)
 		sphere->obj.Ks = w[k];
 
 		list_add_tail(&sphere->obj.entry, &scene->objects);
-
-		/* Not supposed to changed by the host, so unmap */
-		buf_unmap(sphere);
 	}
 
 	return 0;
@@ -1262,7 +1276,16 @@ static void light_init(struct light *light, struct light_ops *ops,
 	light->intensity = intensity;
 }
 
+static int distant_light_unmap(struct light *light)
+{
+	struct distant_light *dlight =
+		container_of(light, struct distant_light, light);
+
+	return buf_unmap(dlight);
+}
+
 struct light_ops distant_light_ops = {
+	.unmap           = distant_light_unmap,
 	.illuminate      = distant_light_illuminate,
 	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
 };
@@ -1279,7 +1302,16 @@ static void distant_light_init(struct distant_light *dlight, const mat4_t *l2w,
 	dlight->dir = v3_norm(dir);
 }
 
+static int point_light_unmap(struct light *light)
+{
+	struct point_light *plight =
+		container_of(light, struct point_light, light);
+
+	return buf_unmap(plight);
+}
+
 struct light_ops point_light_ops = {
+	.unmap           = point_light_unmap,
 	.illuminate      = point_light_illuminate,
 	.illuminate_type = POINT_LIGHT_ILLUMINATE,
 };
@@ -1316,9 +1348,6 @@ static int lights_create(struct scene *scene)
 
 	distant_light_init(dlight, &l2w, &color, intensity);
 	list_add_tail(&dlight->light.entry, &scene->lights);
-
-	/* Not supposed to changed by the host, so unmap */
-	buf_unmap(dlight);
 
 	return 0;
 }
@@ -1369,6 +1398,27 @@ static void scene_destroy(struct scene *scene)
 	lights_destroy(scene);
 	buf_destroy(scene->framebuffer);
 	buf_destroy(scene);
+}
+
+static int scene_finish(struct scene *scene)
+{
+	struct object *object;
+	struct light *light;
+	int ret;
+
+	list_for_each_entry(object, &scene->objects, entry) {
+		ret = object->ops.unmap(object);
+		if (ret)
+			return ret;
+	}
+
+	list_for_each_entry(light, &scene->lights, entry) {
+		ret = light->ops.unmap(light);
+		if (ret)
+			return ret;
+	}
+
+	return buf_unmap(scene);
 }
 
 static void render_soft(struct scene *scene)
@@ -1472,8 +1522,9 @@ int main(int argc, char **argv)
 	ret = lights_create(scene);
 	assert(!ret);
 
-	/* Unmap scene, should be just before render */
-	buf_unmap(scene);
+	/* Commit all scene changes before rendering */
+	ret = scene_finish(scene);
+	assert(!ret);
 
 	/* Finally render */
 	render(scene);
