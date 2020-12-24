@@ -40,7 +40,7 @@
 struct scene;
 
 typedef unsigned int uint32_t;
-typedef int          int32_t;
+typedef int	     int32_t;
 
 #endif /* __OPENCL__ */
 
@@ -69,12 +69,12 @@ struct opencl;
 struct scene {
 	uint32_t width;
 	uint32_t height;
-	float    fov;
-	vec3_t   back_color;
-	mat4_t   c2w;
-	float    bias;
+	float	 fov;
+	vec3_t	 back_color;
+	mat4_t	 c2w;
+	float	 bias;
 	uint32_t max_depth;
-	__global vec3_t   *framebuffer;
+	__global vec3_t	  *framebuffer;
 	struct opencl *opencl;
 
 	struct list_head objects;
@@ -84,11 +84,11 @@ struct scene {
 #ifndef __OPENCL__
 
 struct opencl {
-	cl_context       context;
-	cl_device_id     device_id;
+	cl_context	 context;
+	cl_device_id	 device_id;
 	cl_command_queue queue;
-	cl_program       program;
-	cl_kernel        kernel;
+	cl_program	 program;
+	cl_kernel	 kernel;
 };
 
 enum {
@@ -279,7 +279,7 @@ struct object_ops {
 };
 
 struct object {
-	struct object_ops ops;   /* because of opencl can't be a pointer */
+	struct object_ops ops;	 /* because of opencl can't be a pointer */
 	struct list_head entry;
 	mat4_t o2w;
 	mat4_t w2o;
@@ -314,13 +314,13 @@ static bool sphere_intersect(__global struct object *obj, const vec3_t *orig,
 
 	/* analytic solution */
 	vec3_t L = v3_sub(*orig, sphere->center);
-        float a = v3_dot(*dir, *dir);
-        float b = 2 * v3_dot(*dir, L);
-        float c = v3_dot(L, L) - sphere->radius_pow2;
+	float a = v3_dot(*dir, *dir);
+	float b = 2 * v3_dot(*dir, L);
+	float c = v3_dot(L, L) - sphere->radius_pow2;
 
-        if (!solve_quadratic(a, b, c, &t0, &t1))
+	if (!solve_quadratic(a, b, c, &t0, &t1))
 		return false;
-        if (t0 > t1) {
+	if (t0 > t1) {
 		SWAP(t0, t1);
 	}
 	if (t0 < 0) {
@@ -329,8 +329,8 @@ static bool sphere_intersect(__global struct object *obj, const vec3_t *orig,
 		if (t0 < 0)
 			/* both t0 and t1 are negative */
 			return false;
-        }
-        *near = t0;
+	}
+	*near = t0;
 
 	return true;
 }
@@ -347,25 +347,25 @@ static void sphere_get_surface_props(__global struct object *obj,
 
 	*hit_normal = v3_norm(v3_sub(*hit_point, sphere->center));
 
-        /*
+	/*
 	 * In this particular case, the normal is simular to a point on a unit sphere
-         * centred around the origin. We can thus use the normal coordinates to compute
+	 * centred around the origin. We can thus use the normal coordinates to compute
 	 * the spherical coordinates of Phit.
-         * atan2 returns a value in the range [-pi, pi] and we need to remap it to range [0, 1]
-         * acosf returns a value in the range [0, pi] and we also need to remap it to the range [0, 1]
+	 * atan2 returns a value in the range [-pi, pi] and we need to remap it to range [0, 1]
+	 * acosf returns a value in the range [0, pi] and we also need to remap it to the range [0, 1]
 	 */
-        hit_tex_coords->x = (1 + atan2(hit_normal->z, hit_normal->x) / M_PI) * 0.5;
-        hit_tex_coords->y = acosf(hit_normal->y) / M_PI;
+	hit_tex_coords->x = (1 + atan2(hit_normal->z, hit_normal->x) / M_PI) * 0.5;
+	hit_tex_coords->y = acosf(hit_normal->y) / M_PI;
 }
 
 struct triangle_mesh {
-	struct object     obj;
-	bool              smooth_shading; /* smooth shading */
-	uint32_t          num_tris;       /* number of triangles */
-	__global vec3_t   *P;             /* triangles vertex position */
-	__global uint32_t *tris_index;    /* vertex index array */
-	__global vec3_t   *N;             /* triangles vertex normals */
-	__global vec2_t   *sts;           /* triangles texture coordinates */
+	struct object	  obj;
+	bool		  smooth_shading; /* smooth shading */
+	uint32_t	  num_tris;	  /* number of triangles */
+	__global vec3_t	  *P;		  /* triangles vertex position */
+	__global uint32_t *tris_index;	  /* vertex index array */
+	__global vec3_t	  *N;		  /* triangles vertex normals */
+	__global vec2_t	  *sts;		  /* triangles texture coordinates */
 };
 
 static bool
@@ -411,12 +411,12 @@ static bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *o
 	__global struct triangle_mesh *mesh;
 
 	uint32_t j, i;
-        bool isect;
+	bool isect;
 
 	mesh = container_of(obj, typeof(*mesh), obj);
 
 	isect = false;
-        for (i = 0, j = 0; i < mesh->num_tris; i++) {
+	for (i = 0, j = 0; i < mesh->num_tris; i++) {
 		__global const vec3_t *P = mesh->P;
 		__global const vec3_t *v0 = &P[mesh->tris_index[j + 0]];
 		__global const vec3_t *v1 = &P[mesh->tris_index[j + 1]];
@@ -432,9 +432,9 @@ static bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *o
 			isect = true;
 		}
 		j += 3;
-        }
+	}
 
-        return isect;
+	return isect;
 }
 
 static void triangle_mesh_get_surface_props(__global struct object *obj,
@@ -460,8 +460,7 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 		n1 = v3_muls(n2, uv->y);
 
 		*hit_normal = v3_add(n2, v3_add(n0, n1));
-        }
-        else {
+	} else {
 		/* face normal */
 		__global const vec3_t *P = mesh->P;
 		vec3_t v0 = P[mesh->tris_index[index * 3 + 0]];
@@ -472,19 +471,19 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 		vec3_t v2v0 = v3_sub(v2, v0);
 
 		*hit_normal = v3_cross(v1v0, v2v0);
-        }
+	}
 
-        /*
+	/*
 	 * doesn't need to be normalized as the N's are
 	 * normalized but just for safety
 	 */
 	*hit_normal = v3_norm(*hit_normal);
 
-        /* texture coordinates */
+	/* texture coordinates */
 	sts = mesh->sts;
-        st0 = sts[index * 3 + 0];
-        st1 = sts[index * 3 + 1];
-        st2 = sts[index * 3 + 2];
+	st0 = sts[index * 3 + 0];
+	st1 = sts[index * 3 + 1];
+	st2 = sts[index * 3 + 2];
 
 	st0 = v2_muls(st0, 1 - uv->x - uv->y);
 	st1 = v2_muls(st1, uv->x);
@@ -505,7 +504,7 @@ struct light_ops {
 };
 
 struct light {
-	struct light_ops ops;   /* because of opencl can't a pointer */
+	struct light_ops ops;	/* because of opencl can't a pointer */
 	struct list_head entry;
 	vec3_t color;
 	float intensity;
@@ -526,7 +525,7 @@ static void distant_light_illuminate(__global struct light *light, const vec3_t 
 
 	*dir = dlight->dir;
 	*intensity = v3_muls(dlight->light.color, dlight->light.intensity);
-        *distance = INFINITY;
+	*distance = INFINITY;
 }
 
 struct point_light {
@@ -542,10 +541,10 @@ static void point_light_illuminate(__global struct light *light, const vec3_t *o
 
 	plight = container_of(light, typeof(*plight), light);
 
-        *dir = v3_sub(*orig, plight->pos);
-        r_pow2 = v3_dot(*dir, *dir);
-        *distance = sqrt(r_pow2);
-        dir->x /= *distance;
+	*dir = v3_sub(*orig, plight->pos);
+	r_pow2 = v3_dot(*dir, *dir);
+	*distance = sqrt(r_pow2);
+	dir->x /= *distance;
 	dir->y /= *distance;
 	dir->z /= *distance;
 	*intensity = v3_muls(plight->light.color, plight->light.intensity);
@@ -561,7 +560,7 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 #ifndef __OPENCL__
 	return obj->ops.intersect(obj, orig, dir, near, index, uv);
 #else
-	/* OpenCL does not support function pointers, se la vie  */
+	/* OpenCL does not support function pointers, se la vie	 */
 	switch (obj->ops.intersect_type) {
 	case SPHERE_INTERSECT:
 		return sphere_intersect(obj, orig, dir, near, index, uv);
@@ -583,7 +582,7 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 	obj->ops.get_surface_props(obj, hit_point, dir, index,
 				   uv, hit_normal, hit_tex_coords);
 #else
-	/* OpenCL does not support function pointers, se la vie  */
+	/* OpenCL does not support function pointers, se la vie	 */
 	switch (obj->ops.get_surface_props_type) {
 	case SPHERE_GET_SURFACE_PROPS:
 		sphere_get_surface_props(obj, hit_point, dir, index,
@@ -607,7 +606,7 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 #ifndef __OPENCL__
 	light->ops.illuminate(light, orig, dir, intensity, distance);
 #else
-	/* OpenCL does not support function pointers, se la vie  */
+	/* OpenCL does not support function pointers, se la vie	 */
 	switch (light->ops.illuminate_type) {
 	case DISTANT_LIGHT_ILLUMINATE:
 		distant_light_illuminate(light, orig, dir, intensity, distance);
@@ -1016,10 +1015,10 @@ static int sphere_unmap(struct object *obj)
 }
 
 struct object_ops sphere_ops = {
-	.unmap                  = sphere_unmap,
-	.intersect              = sphere_intersect,
-	.intersect_type         = SPHERE_INTERSECT,
-	.get_surface_props      = sphere_get_surface_props,
+	.unmap			= sphere_unmap,
+	.intersect		= sphere_intersect,
+	.intersect_type		= SPHERE_INTERSECT,
+	.get_surface_props	= sphere_get_surface_props,
 	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
@@ -1053,11 +1052,11 @@ static int triangle_mesh_unmap(struct object *obj)
 }
 
 struct object_ops triangle_mesh_ops = {
-	.destroy                = triangle_mesh_destroy,
-	.unmap                  = triangle_mesh_unmap,
-	.intersect              = triangle_mesh_intersect,
-	.intersect_type         = TRIANGLE_MESH_INTERSECT,
-	.get_surface_props      = triangle_mesh_get_surface_props,
+	.destroy		= triangle_mesh_destroy,
+	.unmap			= triangle_mesh_unmap,
+	.intersect		= triangle_mesh_intersect,
+	.intersect_type		= TRIANGLE_MESH_INTERSECT,
+	.get_surface_props	= triangle_mesh_get_surface_props,
 	.get_surface_props_type = TRIANGLE_MESH_GET_SURFACE_PROPS,
 
 };
@@ -1084,15 +1083,15 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 				max_vert_index = verts_index[k + j];
 		}
 		k += face_index[i];
-        }
-        max_vert_index += 1;
+	}
+	max_vert_index += 1;
 
 	/* allocate memory to store the position of the mesh vertices */
-        P = buf_allocate(scene->opencl, max_vert_index * sizeof(*P));
+	P = buf_allocate(scene->opencl, max_vert_index * sizeof(*P));
 	assert(P);
 
 	/* Transform vertices to world space */
-        for (i = 0; i < max_vert_index; ++i)
+	for (i = 0; i < max_vert_index; ++i)
 		P[i] = m4_mul_pos(*o2w, verts[i]);
 
 	tris_index = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*tris_index));
@@ -1108,10 +1107,10 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 	object_init(&mesh->obj, &triangle_mesh_ops, o2w);
 
 	/* Computing the transpse of the object-to-world inverse matrix */
-        transform_normals = m4_transpose(mesh->obj.w2o);
+	transform_normals = m4_transpose(mesh->obj.w2o);
 
-        /* Generate the triangle index array and set normals and st coordinates */
-        for (i = 0, k = 0, l = 0; i < nfaces; i++) {
+	/* Generate the triangle index array and set normals and st coordinates */
+	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
 		/* Each triangle in a face */
 		for (j = 0; j < face_index[i] - 2; j++) {
 			tris_index[l + 0] = verts_index[k];
@@ -1133,7 +1132,7 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 			l += 3;
 		}
 		k += face_index[i];
-        }
+	}
 
 	mesh->num_tris = num_tris;
 	mesh->P = P;
@@ -1295,8 +1294,8 @@ static int distant_light_unmap(struct light *light)
 }
 
 struct light_ops distant_light_ops = {
-	.unmap           = distant_light_unmap,
-	.illuminate      = distant_light_illuminate,
+	.unmap		 = distant_light_unmap,
+	.illuminate	 = distant_light_illuminate,
 	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
 };
 
@@ -1321,8 +1320,8 @@ static int point_light_unmap(struct light *light)
 }
 
 struct light_ops point_light_ops = {
-	.unmap           = point_light_unmap,
-	.illuminate      = point_light_illuminate,
+	.unmap		 = point_light_unmap,
+	.illuminate	 = point_light_illuminate,
 	.illuminate_type = POINT_LIGHT_ILLUMINATE,
 };
 
@@ -1386,17 +1385,17 @@ static struct scene *scene_create(struct opencl *opencl, uint32_t width,
 	assert(scene);
 
 	*scene = (struct scene) {
-		.width        = width,
-		.height       = height,
-		.fov          = fov,
+		.width	      = width,
+		.height	      = height,
+		.fov	      = fov,
 		.back_color   = {0.235294f, 0.67451f, 0.843137f},
-		.c2w          = m4_identity(),
-		.bias         = 0.0001,
-		.opencl       = opencl,
+		.c2w	      = m4_identity(),
+		.bias	      = 0.0001,
+		.opencl	      = opencl,
 		.max_depth    = 5,
 		.framebuffer  = framebuffer,
 		.objects      = LIST_HEAD_INIT(scene->objects),
-		.lights       = LIST_HEAD_INIT(scene->lights),
+		.lights	      = LIST_HEAD_INIT(scene->lights),
 	};
 
 	return scene;
