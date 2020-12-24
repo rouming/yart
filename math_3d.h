@@ -333,11 +333,12 @@ static inline mat4_t m4_transpose(mat4_t matrix) {
  */
 static inline mat4_t m4_mul(mat4_t a, mat4_t b) {
 	mat4_t result;
-	
-	for(int i = 0; i < 4; i++) {
-		for(int j = 0; j < 4; j++) {
+	int i, j, k;
+
+	for(i = 0; i < 4; i++) {
+		for(j = 0; j < 4; j++) {
 			float sum = 0;
-			for(int k = 0; k < 4; k++) {
+			for(k = 0; k < 4; k++) {
 				sum += a.m[k][j] * b.m[i][k];
 			}
 			result.m[i][j] = sum;
@@ -622,7 +623,8 @@ static inline void m4_fprint(FILE* stream, mat4_t matrix) {
 static inline void m4_fprintp(FILE* stream, mat4_t matrix, int width, int precision) {
 	mat4_t m = matrix;
 	int w = width, p = precision;
-	for(int r = 0; r < 4; r++) {
+	int r;
+	for(r = 0; r < 4; r++) {
 		fprintf(stream, "| %*.*f %*.*f %*.*f %*.*f |\n",
 			w, p, m.m[0][r], w, p, m.m[1][r], w, p, m.m[2][r], w, p, m.m[3][r]
 		);

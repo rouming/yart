@@ -1,6 +1,6 @@
 CC = gcc
 DEFINES = -D_GNU_SOURCE
-CFLAGS = -g -O3 -Wall
+CFLAGS = -g -O3 -std=gnu89 -Wall
 
 DEPS = $(shell find . -name '*.h')
 SOURCES:= $(shell find . -name '*.c')
