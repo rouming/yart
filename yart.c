@@ -1462,7 +1462,7 @@ static void render(struct scene *scene)
 	} else {
 		render_soft(scene);
 	}
-	fprintf(stderr, "\rDone: %.2f (sec)\n", (nsecs() - ns) / 1000000000.0);
+	fprintf(stderr, "\rDone: %.6f (sec)\n", (nsecs() - ns) / 1000000000.0);
 
 	/* save framebuffer to file */
 	out = fopen("yart-out.ppm", "w");
