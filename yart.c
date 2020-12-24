@@ -21,6 +21,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <endian.h>
 
 #define CL_TARGET_OPENCL_VERSION 220
 #include <CL/cl.h>
@@ -41,6 +42,8 @@ struct scene;
 
 typedef unsigned int uint32_t;
 typedef int	     int32_t;
+
+typedef unsigned char uint8_t;
 
 #endif /* __OPENCL__ */
 
@@ -66,6 +69,21 @@ typedef int	     int32_t;
 
 struct opencl;
 
+struct rgba {
+	union {
+		struct {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+			uint8_t a, b, g, r;
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+			uint8_t r, g, b, a;
+#else
+#error "Unknown endianess"
+#endif
+		};
+		uint32_t rgba8888;
+	};
+};
+
 struct scene {
 	uint32_t width;
 	uint32_t height;
@@ -74,7 +92,7 @@ struct scene {
 	mat4_t	 c2w;
 	float	 bias;
 	uint32_t max_depth;
-	__global vec3_t	  *framebuffer;
+	__global struct rgba *framebuffer;
 	struct opencl *opencl;
 
 	struct list_head objects;
@@ -819,12 +837,21 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 	return hit_color;
 }
 
+static inline void color_vec_to_rgba32(const vec3_t *color, struct rgba *rgb)
+{
+	*rgb = (struct rgba) {
+		.r = (255 * clamp(0.0f, 1.0f, color->x)),
+		.g = (255 * clamp(0.0f, 1.0f, color->y)),
+		.b = (255 * clamp(0.0f, 1.0f, color->z))
+	};
+}
+
 #ifdef __OPENCL__
 
 __kernel void render_opencl(__global struct scene *scene)
 {
 	float x, y, scale, img_ratio;
-	vec3_t orig, dir;
+	vec3_t orig, dir, color;
 	uint32_t i, ix, iy;
 
 	scale = tan(deg2rad(scene->fov * 0.5f));
@@ -843,7 +870,8 @@ __kernel void render_opencl(__global struct scene *scene)
 	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 	dir = v3_norm(dir);
 
-	scene->framebuffer[i] = ray_cast(scene, &orig, &dir, 0);
+	color = ray_cast(scene, &orig, &dir, 0);
+	color_vec_to_rgba32(&color, &scene->framebuffer[i]);
 }
 
 #else /* !__OPENCL__ */
@@ -1375,7 +1403,7 @@ static struct scene *scene_create(struct opencl *opencl, uint32_t width,
 				  uint32_t height, float fov)
 {
 	struct scene *scene;
-	vec3_t *framebuffer;
+	struct rgba *framebuffer;
 
 	/* Don't mmap by default */
 	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer), 0);
@@ -1432,8 +1460,9 @@ static int scene_finish(struct scene *scene)
 
 static void render_soft(struct scene *scene)
 {
-	vec3_t *pix, orig;
 	float scale, img_ratio;
+	vec3_t orig, color;
+	struct rgba *pix;
 	uint32_t i, j;
 
 	scale = tan(deg2rad(scene->fov * 0.5));
@@ -1452,9 +1481,9 @@ static void render_soft(struct scene *scene)
 			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
 			dir = v3_norm(dir);
 
-			*pix = ray_cast(scene, &orig, &dir, 0);
+			color = ray_cast(scene, &orig, &dir, 0);
+			color_vec_to_rgba32(&color, pix);
 			pix++;
-
 		}
 	}
 }
@@ -1483,11 +1512,9 @@ static void render(struct scene *scene)
 
 	fprintf(out, "P6\n%d %d\n255\n", scene->width, scene->height);
 	for (i = 0; i < scene->height * scene->width; ++i) {
-		char r = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].x));
-		char g = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].y));
-		char b = (char)(255 * clamp(0.0f, 1.0f, scene->framebuffer[i].z));
+		struct rgba *rgb = &scene->framebuffer[i];
 
-		fprintf(out, "%c%c%c", r, g, b);
+		fprintf(out, "%c%c%c", rgb->r, rgb->g, rgb->b);
 	}
 	fclose(out);
 
