@@ -1,3 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * YART (Yet Another Ray Tracing) boosted by OpenCL
+ * Copyright (C) 2020,2021 Roman Penyaev
+ *
+ * Based on lessons from scratchapixel.com and pbr-book.org
+ *
+ * Roman Penyaev <r.peniaev@gmail.com>
+ */
+
 #ifndef __OPENCL__
 #include <assert.h>
 #include <float.h>
