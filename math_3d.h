@@ -457,42 +457,21 @@ static inline mat4_t m4_perspective(float vertical_field_of_view_in_deg, float a
  * x has to be normalized because the cross product only produces a normalized
  *   output vector if both input vectors are orthogonal to each other. And up
  *   probably isn't orthogonal to z.
- * 
- * These vectors are then used to build a 3x3 rotation matrix. This matrix
- * rotates a vector by the same amount the camera is rotated. But instead we
- * need to rotate all incoming vertices backwards by that amount. That's what a
- * camera matrix is for: To move the world so that the camera is in the origin.
- * So we take the inverse of that rotation matrix and in case of an rotation
- * matrix this is just the transposed matrix. That's why the 3x3 part of the
- * matrix are the x, y and z vectors but written horizontally instead of
- * vertically.
- * 
- * The translation is derived by creating a translation matrix to move the world
- * into the origin (thats translate by minus `from`). The complete lookat matrix
- * is then this translation followed by the rotation. Written as matrix
- * multiplication:
- * 
- *   lookat = rotation * translation
- * 
- * Since we're right-handed this equals to first doing the translation and after
- * that doing the rotation. During that multiplication the rotation 3x3 part
- * doesn't change but the translation vector is multiplied with each rotation
- * axis. The dot product is just a more compact way to write the actual
- * multiplications.
+ *
+ * Matrix is column-major.
  */
 static inline mat4_t m4_look_at(vec3_t from, vec3_t to, vec3_t up) {
-	vec3_t z = v3_muls(v3_norm(v3_sub(to, from)), -1);
-	vec3_t x = v3_norm(v3_cross(up, z));
-	vec3_t y = v3_cross(z, x);
-	
+	vec3_t z = v3_norm(v3_sub(from, to)); /* forward */
+	vec3_t x = v3_norm(v3_cross(up, z));  /* right */
+	vec3_t y = v3_cross(z, x);            /* up */
+
 	return mat4(
-		x.x, x.y, x.z, -v3_dot(from, x),
-		y.x, y.y, y.z, -v3_dot(from, y),
-		z.x, z.y, z.z, -v3_dot(from, z),
+		x.x, y.x, z.x, from.x,
+		x.y, y.y, z.y, from.y,
+		x.z, y.z, z.z, from.z,
 		0,   0,   0,    1
 	);
 }
-
 
 /**
  * Inverts an affine transformation matrix. That are translation, scaling,
