@@ -118,7 +118,6 @@ enum {
 struct buf_region {
 	struct opencl *opencl;
 	uint32_t      size;
-	uint32_t      flags;
 };
 
 static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
@@ -162,7 +161,6 @@ static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
 		memset(ptr, 0, sz);
 
 	reg->opencl = opencl;
-	reg->flags = flags;
 	reg->size = sz;
 
 	return ptr;
@@ -184,42 +182,47 @@ static void buf_destroy(void *ptr)
 	}
 }
 
-static int buf_map(void *ptr, uint32_t flags)
+static int __buf_map(struct opencl *opencl, void *ptr,
+		     size_t size, uint32_t flags)
 {
-	struct buf_region *reg = (ptr - 16);
 	cl_map_flags cl_flags = 0;
-	int ret = 0;
 
 	if (!flags)
 		return -EINVAL;
+
+	if (!opencl)
+		return 0;
 
 	if (flags & BUF_MAP_WRITE)
 		cl_flags |= CL_MAP_WRITE;
 	if (flags & BUF_MAP_READ)
 		cl_flags |= CL_MAP_READ;
 
-	if (reg->opencl) {
-		ret = clEnqueueSVMMap(reg->opencl->queue, CL_TRUE,
-				      cl_flags, ptr, reg->size,
-				      0, NULL, NULL);
-		if (!ret)
-			reg->flags = flags;
-	}
+	return clEnqueueSVMMap(opencl->queue, CL_TRUE,
+			       cl_flags, ptr, size,
+			       0, NULL, NULL);
+}
 
-	return ret;
+static int buf_map(void *ptr, uint32_t flags)
+{
+	struct buf_region *reg = (ptr - 16);
+
+	return __buf_map(reg->opencl, ptr, reg->size, flags);
+}
+
+static int __buf_unmap(struct opencl *opencl, void *ptr)
+{
+	if (!opencl)
+		return 0;
+
+	return clEnqueueSVMUnmap(opencl->queue, ptr, 0, NULL, NULL);
 }
 
 static int buf_unmap(void *ptr)
 {
 	struct buf_region *reg = (ptr - 16);
-	int ret = 0;
 
-	if (reg->opencl) {
-		ret = clEnqueueSVMUnmap(reg->opencl->queue, ptr,
-					0, NULL, NULL);
-	}
-
-	return ret;
+	return __buf_unmap(reg->opencl, ptr);
 }
 
 static inline unsigned long long nsecs(void)
