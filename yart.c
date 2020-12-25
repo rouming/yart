@@ -19,12 +19,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <getopt.h>
 #include <time.h>
 #include <errno.h>
 #include <endian.h>
 
 #define CL_TARGET_OPENCL_VERSION 220
 #include <CL/cl.h>
+
+#include <SDL2/SDL.h>
 
 #define __global
 
@@ -68,6 +71,7 @@ typedef unsigned char uint8_t;
 #define EPSILON 1e-8
 
 struct opencl;
+struct sdl;
 
 struct rgba {
 	union {
@@ -84,6 +88,13 @@ struct rgba {
 	};
 };
 
+struct camera {
+	vec3_t pos;
+	vec3_t dir;
+	float  pitch;
+	float  yaw;
+};
+
 struct scene {
 	uint32_t width;
 	uint32_t height;
@@ -92,8 +103,10 @@ struct scene {
 	mat4_t	 c2w;
 	float	 bias;
 	uint32_t max_depth;
+	struct camera cam;
 	__global struct rgba *framebuffer;
 	struct opencl *opencl;
+	struct sdl    *sdl;
 
 	struct list_head objects;
 	struct list_head lights;
@@ -107,6 +120,12 @@ struct opencl {
 	cl_command_queue queue;
 	cl_program	 program;
 	cl_kernel	 kernel;
+};
+
+struct sdl {
+	SDL_Window   *window;
+	SDL_Renderer *renderer;
+	SDL_Texture  *screen;
 };
 
 enum {
@@ -1402,11 +1421,107 @@ static void lights_destroy(struct scene *scene)
 	}
 }
 
-static struct scene *scene_create(struct opencl *opencl, uint32_t width,
-				  uint32_t height, float fov)
+static int sdl_init(struct scene *scene)
+{
+	struct sdl *sdl;
+	int ret;
+
+	ret = SDL_Init(SDL_INIT_VIDEO);
+	if (ret) {
+		printf("Can't init SDL\n");
+		return -1;
+	}
+
+	sdl = malloc(sizeof(*sdl));
+	assert(sdl);
+
+	sdl->window = SDL_CreateWindow("", SDL_WINDOWPOS_CENTERED,
+				       SDL_WINDOWPOS_CENTERED,
+				       scene->width, scene->height,
+				       SDL_WINDOW_RESIZABLE);
+	assert(sdl->window);
+
+	sdl->renderer = SDL_CreateRenderer(sdl->window, -1,
+					   SDL_RENDERER_PRESENTVSYNC);
+	assert(sdl->renderer);
+
+	SDL_SetWindowMinimumSize(sdl->window, scene->width, scene->height);
+	SDL_RenderSetLogicalSize(sdl->renderer, scene->width, scene->height);
+	SDL_RenderSetIntegerScale(sdl->renderer, SDL_TRUE);
+	SDL_SetRenderDrawBlendMode(sdl->renderer, SDL_BLENDMODE_BLEND);
+
+	sdl->screen = SDL_CreateTexture(sdl->renderer, SDL_PIXELFORMAT_RGBA8888,
+					SDL_TEXTUREACCESS_STREAMING,
+					scene->width, scene->height);
+	assert(sdl->screen);
+
+	scene->sdl = sdl;
+
+	return 0;
+}
+
+static void sdl_deinit(struct scene *scene)
+{
+	struct sdl *sdl = scene->sdl;
+
+	if (!sdl)
+		return;
+
+	SDL_DestroyTexture(sdl->screen);
+	SDL_DestroyRenderer(sdl->renderer);
+	SDL_DestroyWindow(sdl->window);
+	free(sdl);
+	scene->sdl = NULL;
+}
+
+static void camera_set_angles(struct scene *scene, float pitch, float yaw)
+{
+	struct camera *cam = &scene->cam;
+
+	if (pitch >= 90.0)
+		pitch = 89.9;
+	else if (pitch <= -90.0)
+		pitch = -89.9;
+
+	// -Z axis (0, 0, -1): pitch -> yaw
+	cam->dir.x = sin(deg2rad(yaw))*cos(deg2rad(pitch));
+	cam->dir.y = sin(deg2rad(pitch));
+	cam->dir.z = -cos(deg2rad(yaw))*cos(deg2rad(pitch));
+
+	cam->pitch = pitch;
+	cam->yaw = yaw;
+}
+
+static void camera_update_c2w(struct scene *scene)
+{
+	struct camera *cam = &scene->cam;
+	int ret;
+
+	ret = __buf_map(scene->opencl, &scene->c2w, sizeof(scene->c2w),
+			BUF_MAP_WRITE);
+	assert(!ret);
+
+	scene->c2w = m4_look_at(cam->pos, v3_add(cam->pos, cam->dir),
+				vec3(0.0f, 1.0f, 0.0f));
+
+	ret = __buf_unmap(scene->opencl, &scene->c2w);
+	assert(!ret);
+}
+
+static void camera_inc_angles(struct scene *scene, float inc_pitch, float inc_yaw)
+{
+	struct camera *cam = &scene->cam;
+	camera_set_angles(scene, cam->pitch + inc_pitch, cam->yaw + inc_yaw);
+}
+
+static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
+				  uint32_t width, uint32_t height,
+				  vec3_t cam_pos, float cam_pitch,
+				  float cam_yaw, float fov)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
+	int ret;
 
 	/* Don't mmap by default */
 	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer), 0);
@@ -1427,13 +1542,25 @@ static struct scene *scene_create(struct opencl *opencl, uint32_t width,
 		.framebuffer  = framebuffer,
 		.objects      = LIST_HEAD_INIT(scene->objects),
 		.lights	      = LIST_HEAD_INIT(scene->lights),
+
+		.cam = {
+			.pos   = cam_pos,
+		},
 	};
+	camera_set_angles(scene, cam_pitch, cam_yaw);
+	camera_update_c2w(scene);
+
+	if (!no_sdl) {
+		ret = sdl_init(scene);
+		assert(!ret);
+	}
 
 	return scene;
 };
 
 static void scene_destroy(struct scene *scene)
 {
+	sdl_deinit(scene);
 	objects_destroy(scene);
 	lights_destroy(scene);
 	buf_destroy(scene->framebuffer);
@@ -1491,7 +1618,7 @@ static void render_soft(struct scene *scene)
 	}
 }
 
-static void render(struct scene *scene)
+static void one_frame_render(struct scene *scene)
 {
 	unsigned long long ns;
 	FILE *out;
@@ -1524,7 +1651,156 @@ static void render(struct scene *scene)
 	/* Unmap */
 	ret = buf_unmap(scene->framebuffer);
 	assert(!ret);
+}
 
+static void render(struct scene *scene)
+{
+	struct sdl *sdl = scene->sdl;
+	unsigned long long ns, fps;
+	int ret;
+
+	SDL_SetRelativeMouseMode(SDL_TRUE);
+	SDL_StopTextInput();
+
+	ns = nsecs();
+	fps = 0;
+
+	/* Main render loop */
+	while (1) {
+		struct camera *cam = &scene->cam;
+		SDL_Event event;
+		SDL_Point mouse;
+		const uint8_t *keyb;
+		bool updated_cam = false;
+
+		SDL_GetRelativeMouseState(&mouse.x, &mouse.y);
+		keyb = SDL_GetKeyboardState(NULL);
+
+		while (SDL_PollEvent(&event)) {
+			if (event.type == SDL_QUIT)
+				/* Exit */
+				return;
+
+			if (event.type == SDL_KEYDOWN) {
+				if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
+					/* Exit */
+					return;
+			}
+		}
+
+		/* Handle mouse movement */
+		if (mouse.y && mouse.x) {
+			camera_inc_angles(scene, -mouse.y * 0.05f, mouse.x * 0.05f);
+			updated_cam = true;
+		}
+
+		/* Handle keyboard */
+		if (keyb[SDL_SCANCODE_W]) {
+			cam->pos = v3_add(cam->pos, v3_muls(cam->dir, 0.1f));
+			updated_cam = true;
+		}
+		else if (keyb[SDL_SCANCODE_S]) {
+			cam->pos = v3_sub(cam->pos, v3_muls(cam->dir, 0.1f));
+			updated_cam = true;
+		}
+		if (keyb[SDL_SCANCODE_A]) {
+			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
+			vec3_t right = v3_cross(cam->dir, up);
+
+			cam->pos = v3_sub(cam->pos, v3_muls(right, 0.1f));
+			updated_cam = true;
+		}
+		else if (keyb[SDL_SCANCODE_D]) {
+			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
+			vec3_t right = v3_cross(cam->dir, up);
+
+			cam->pos = v3_add(cam->pos, v3_muls(right, 0.1f));
+			updated_cam = true;
+		}
+
+		/* Update cam-to-world matrix */
+		if (updated_cam)
+			camera_update_c2w(scene);
+
+		/* Render one frame */
+		if (scene->opencl) {
+			opencl_invoke(scene);
+		} else {
+			render_soft(scene);
+		}
+
+		/* Map for reading */
+		ret = buf_map(scene->framebuffer, BUF_MAP_READ);
+		assert(!ret);
+
+		SDL_RenderClear(sdl->renderer);
+		SDL_UpdateTexture(sdl->screen, NULL, scene->framebuffer,
+				  scene->width * sizeof(*scene->framebuffer));
+		SDL_RenderCopy(sdl->renderer, sdl->screen, NULL, NULL);
+		SDL_RenderPresent(sdl->renderer);
+
+		/* Unmap */
+		ret = buf_unmap(scene->framebuffer);
+		assert(!ret);
+
+		fps++;
+		if (nsecs() - ns >= 1000000000ull) {
+			fprintf(stderr, "\r%lld FPS", fps);
+			ns = nsecs();
+			fps = 0;
+		}
+	}
+}
+
+static int no_opencl;
+static int one_frame;
+
+enum {
+	OPT_FOV = 'a',
+	OPT_SCREEN_WIDTH,
+	OPT_SCREEN_HEIGHT,
+
+	OPT_CAM_PITCH,
+	OPT_CAM_YAW,
+	OPT_CAM_POS,
+};
+
+static struct option long_options[] = {
+	{"no-opencl", no_argument,       &no_opencl, 1},
+	{"opencl",    no_argument,       &no_opencl, 0},
+	{"one-frame", no_argument,       &one_frame, 1},
+	{"fov",       required_argument, 0, OPT_FOV},
+	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
+	{"height",    required_argument, 0, OPT_SCREEN_HEIGHT},
+	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
+	{"yaw",       required_argument, 0, OPT_CAM_YAW},
+	{"pos",       required_argument, 0, OPT_CAM_POS},
+
+	{0, 0, 0, 0}
+};
+
+static void usage(void)
+{
+	printf("Usage:\n"
+	       "  $ yart [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
+	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>]"
+	       "\n"
+	       "OPTIONS:\n"
+	       "   --no-opencl  - no OpenCL hardware accelaration\n"
+	       "   --one-frame  - render one frame and exit\n"
+	       "\n"
+	       "ARGUMENTS:\n"
+	       "   --fov       - field of view angle in degrees (float)\n"
+	       "   --width     - screen width (integer)\n"
+	       "   --height    - screen height (integer)\n"
+	       "   --pitch     - initial camera pitch angle in degrees (float)\n"
+	       "   --yaw       - initial camera yaw angle in degrees (float)\n"
+	       "   --pos       - initial camera position in format x,y,z.\n"
+	       "                 e.g: '--pos 0.0,1.0,12.0'\n"
+	       "\n"
+		);
+
+	exit(EXIT_FAILURE);
 }
 
 int main(int argc, char **argv)
@@ -1535,9 +1811,75 @@ int main(int argc, char **argv)
 	uint32_t width = 1024;
 	uint32_t height = 768;
 
+	float cam_pitch = 0.0f;
+	float cam_yaw = 0.0f;
+	vec3_t cam_pos = vec3(0.0f, 2.0f, 16.0f);
+	float fov = 27.95f; /* 50mm focal lengh */
+
 	int ret;
 
-	if (argc > 1 && !strcmp("opencl", argv[1])) {
+	while (1) {
+		int c, ret, option_index = 0;
+
+		c = getopt_long(argc, argv, "", long_options, &option_index);
+		if (c == -1)
+			break;
+
+		switch (c) {
+		case 0:
+			break;
+		case OPT_FOV:
+			ret = sscanf(optarg, "%f", &fov);
+			if (ret != 1) {
+				printf("Invalid --fov, should be float.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+		case OPT_SCREEN_WIDTH:
+			ret = sscanf(optarg, "%u", &width);
+			if (ret != 1) {
+				printf("Invalid --width, should be integer.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+		case OPT_SCREEN_HEIGHT:
+			ret = sscanf(optarg, "%u", &height);
+			if (ret != 1) {
+				printf("Invalid --height, should be integer.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+		case OPT_CAM_PITCH:
+			ret = sscanf(optarg, "%f", &cam_pitch);
+			if (ret != 1) {
+				printf("Invalid --camera-pitch, should be float.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+		case OPT_CAM_YAW:
+			ret = sscanf(optarg, "%f", &cam_yaw);
+			if (ret != 1) {
+				printf("Invalid --camera-yaw, should be float.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+		case OPT_CAM_POS:
+			ret = sscanf(optarg, "%f,%f,%f", &cam_pos.x, &cam_pos.y, &cam_pos.z);
+			if (ret != 3) {
+				printf("Invalid --camera-pos, should be float,float,float.\n");
+				exit(EXIT_FAILURE);
+			}
+			break;
+
+		case '?':
+			usage();
+			break;
+		default:
+			usage();
+		}
+	}
+
+	if (!no_opencl) {
 		/* Init opencl context */
 		opencl = &__opencl;
 		ret = opencl_init(opencl, "render_opencl");
@@ -1546,12 +1888,9 @@ int main(int argc, char **argv)
 	}
 
 	/* Create scene */
-	scene = scene_create(opencl, width, height, 36.87f);
+	scene = scene_create(opencl, one_frame, width, height,
+			     cam_pos, cam_pitch, cam_yaw, fov);
 	assert(scene);
-
-	/* Camera position */
-	scene->c2w.m32 = 12;
-	scene->c2w.m31 = 1;
 
 	/* Init default objects */
 	ret = objects_create(scene);
@@ -1565,8 +1904,10 @@ int main(int argc, char **argv)
 	ret = scene_finish(scene);
 	assert(!ret);
 
-	/* Finally render */
-	render(scene);
+	if (one_frame)
+		one_frame_render(scene);
+	else
+		render(scene);
 
 	scene_destroy(scene);
 	opencl_deinit(opencl);

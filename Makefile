@@ -29,7 +29,7 @@ yart: $(OBJ)
 ifneq ($(VERBOSE),1)
 	@echo LD $@
 endif
-	$(Q)$(CC) -o $@ $^ -lm -lOpenCL
+	$(Q)$(CC) -o $@ $^ -lm -lSDL2 -lOpenCL
 
 .PHONY: clean
 
