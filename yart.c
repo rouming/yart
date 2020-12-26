@@ -1052,8 +1052,15 @@ static void object_init(struct object *obj, struct object_ops *ops,
 static void object_destroy(struct object *obj)
 {
 	list_del(&obj->entry);
-	if (obj->ops.destroy)
-		obj->ops.destroy(obj);
+	obj->ops.destroy(obj);
+}
+
+static void sphere_destroy(struct object *obj)
+{
+	struct sphere *sphere =
+		container_of(obj, struct sphere, obj);
+
+	buf_destroy(sphere);
 }
 
 static int sphere_unmap(struct object *obj)
@@ -1065,6 +1072,7 @@ static int sphere_unmap(struct object *obj)
 }
 
 struct object_ops sphere_ops = {
+	.destroy		= sphere_destroy,
 	.unmap			= sphere_unmap,
 	.intersect		= sphere_intersect,
 	.intersect_type		= SPHERE_INTERSECT,
