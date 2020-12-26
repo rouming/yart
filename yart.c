@@ -1080,12 +1080,25 @@ struct object_ops sphere_ops = {
 	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
+static void sphere_set_radius(struct sphere *sphere, float radius)
+{
+	sphere->radius = radius;
+	sphere->radius_pow2 = radius * radius;
+}
+
+static void sphere_set_pos(struct sphere *sphere, vec3_t pos)
+{
+	sphere->obj.o2w.m30 = pos.x;
+	sphere->obj.o2w.m31 = pos.y;
+	sphere->obj.o2w.m32 = pos.z;
+	sphere->center = pos;
+}
+
 static void sphere_init(struct sphere *sphere, const mat4_t *o2w, float radius)
 {
 	object_init(&sphere->obj, &sphere_ops, o2w);
 
-	sphere->radius = radius;
-	sphere->radius_pow2 = radius * radius;
+	sphere_set_radius(sphere, radius);
 	sphere->center = m4_mul_pos(*o2w, vec3(0.0f, 0.0f, 0.0f));
 }
 
@@ -1210,6 +1223,7 @@ static int mesh_load(struct scene *scene, const char *file,
 {
 	uint32_t num_faces, verts_ind_arr_sz, verts_arr_sz;
 	int ret, i;
+	size_t pos;
 	FILE *f;
 
 	uint32_t *face_index, *verts_index;
@@ -1297,37 +1311,157 @@ static int mesh_load(struct scene *scene, const char *file,
 	return 0;
 }
 
-static int objects_create(struct scene *scene)
+static int no_opencl;
+static int one_frame;
+
+enum {
+	OPT_FOV = 'a',
+	OPT_SCREEN_WIDTH,
+	OPT_SCREEN_HEIGHT,
+
+	OPT_CAM_PITCH,
+	OPT_CAM_YAW,
+	OPT_CAM_POS,
+
+	OPT_SPHERE,
+};
+
+static struct option long_options[] = {
+	{"no-opencl", no_argument,       &no_opencl, 1},
+	{"opencl",    no_argument,       &no_opencl, 0},
+	{"one-frame", no_argument,       &one_frame, 1},
+	{"fov",       required_argument, 0, OPT_FOV},
+	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
+	{"height",    required_argument, 0, OPT_SCREEN_HEIGHT},
+	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
+	{"yaw",       required_argument, 0, OPT_CAM_YAW},
+	{"pos",       required_argument, 0, OPT_CAM_POS},
+	{"sphere",    required_argument, 0, OPT_SPHERE},
+
+	{0, 0, 0, 0}
+};
+
+enum {
+	SPHERE_RADIUS,
+	SPHERE_ALBEDO,
+	SPHERE_KD,
+	SPHERE_KS,
+	SPHERE_N,
+	SPHERE_POS,
+};
+
+static char *const sphere_token[] = {
+        [SPHERE_RADIUS] = "r",
+        [SPHERE_ALBEDO] = "albedo",
+        [SPHERE_KD]     = "Kd",
+	[SPHERE_KS]     = "Ks",
+	[SPHERE_N]      = "n",
+	[SPHERE_POS]    = "pos",
+        NULL
+};
+
+
+static int parse_sphere_options(char *opts, struct sphere *sphere)
 {
-	float w[5] = {0.04, 0.08, 0.1, 0.15, 0.2};
-	int ret, i = -4, n = 2, k = 0;
+	char *subopts = opts, *value;
+	int errfnd = 0, num, ret;
+	bool radius_set = false;
+	float tmp;
 
-	mat4_t o2w;
+	float *sphere_opts[] = {
+		[SPHERE_RADIUS] = sphere ? &sphere->radius : &tmp,
+		[SPHERE_ALBEDO] = sphere ? &sphere->obj.albedo : &tmp,
+		[SPHERE_KD]     = sphere ? &sphere->obj.Kd : &tmp,
+		[SPHERE_KS]     = sphere ? &sphere->obj.Ks : &tmp,
+		[SPHERE_N]      = sphere ? &sphere->obj.n : &tmp,
+	};
+	vec3_t pos;
 
-	/* Init mesh */
-	o2w = m4_identity();
-	ret = mesh_load(scene, "./plane.geo", &o2w);
-	if (ret)
-		return -ENOMEM;
+	while (*subopts != '\0' && !errfnd) {
+		int c = getsubopt(&subopts, sphere_token, &value);
 
-	/* Init objects */
-	for (; i <= 4; i+= 2, n *= 5, k++) {
+		/* Don't modify opts string in order to parse several times */
+		if (c != -1 && *subopts)
+			*(subopts - 1) = ',';
+
+		switch (c) {
+		case SPHERE_RADIUS:
+			radius_set = true;
+		case SPHERE_ALBEDO:
+		case SPHERE_KD:
+		case SPHERE_KS:
+		case SPHERE_N:
+			ret = sscanf(value, "%f", sphere_opts[c]);
+			if (ret != 1) {
+				fprintf(stderr, "Invald sphere option %s\n", value);
+				return -EINVAL;
+			}
+			break;
+		case SPHERE_POS:
+			ret = sscanf(value, "%f,%f,%f%n", &pos.x, &pos.y, &pos.z,
+				     &num);
+			if (ret != 3) {
+				fprintf(stderr, "Invald sphere pos\n");
+				return -EINVAL;
+			}
+			subopts = value + num;
+			if (subopts[0] == ',')
+				/* Skip trailing comma */
+				subopts += 1;
+			if (sphere)
+				sphere_set_pos(sphere, pos);
+			break;
+		default:
+			fprintf(stderr, "Unknown sphere parameter: %s.\n",
+				value);
+			return -EINVAL;
+		}
+	}
+
+	if (sphere && radius_set)
+		sphere_set_radius(sphere, sphere->radius);
+
+	return 0;
+}
+
+static int objects_create(struct scene *scene, int argc, char **argv)
+{
+	mat4_t o2w = m4_identity();
+
+	optind = 1;
+	while (1) {
+		int c, ret, option_index = 0;
 		struct sphere *sphere;
 
-		sphere = buf_allocate(scene->opencl, sizeof(*sphere));
-		if (!sphere)
-			return -ENOMEM;
+		c = getopt_long(argc, argv, "", long_options, &option_index);
+		if (c == -1)
+			break;
 
-		/* Object position */
-		o2w = m4_identity();
-		o2w.m30 = i;
-		o2w.m31 = 1;
+		/* If the next one is non-option, then expect object path */
+		if (optind < argc && *argv[optind] != '-') {
+			ret = mesh_load(scene, argv[optind], &o2w);
+			if (ret)
+				return ret;
+		}
 
-		sphere_init(sphere, &o2w, 0.9);
-		sphere->obj.n = n;
-		sphere->obj.Ks = w[k];
+		/* Create sphere */
+		switch (c) {
+		case OPT_SPHERE:
+			sphere = buf_allocate(scene->opencl, sizeof(*sphere));
+			if (!sphere)
+				return -ENOMEM;
 
-		list_add_tail(&sphere->obj.entry, &scene->objects);
+			sphere_init(sphere, &o2w, 0.9);
+
+			ret = parse_sphere_options(optarg, sphere);
+			/* Should be already parsed */
+			assert(!ret);
+
+			list_add_tail(&sphere->obj.entry, &scene->objects);
+			break;
+		default:
+			break;
+		}
 	}
 
 	return 0;
@@ -1768,38 +1902,11 @@ static void render(struct scene *scene)
 	}
 }
 
-static int no_opencl;
-static int one_frame;
-
-enum {
-	OPT_FOV = 'a',
-	OPT_SCREEN_WIDTH,
-	OPT_SCREEN_HEIGHT,
-
-	OPT_CAM_PITCH,
-	OPT_CAM_YAW,
-	OPT_CAM_POS,
-};
-
-static struct option long_options[] = {
-	{"no-opencl", no_argument,       &no_opencl, 1},
-	{"opencl",    no_argument,       &no_opencl, 0},
-	{"one-frame", no_argument,       &one_frame, 1},
-	{"fov",       required_argument, 0, OPT_FOV},
-	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
-	{"height",    required_argument, 0, OPT_SCREEN_HEIGHT},
-	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
-	{"yaw",       required_argument, 0, OPT_CAM_YAW},
-	{"pos",       required_argument, 0, OPT_CAM_POS},
-
-	{0, 0, 0, 0}
-};
-
 static void usage(void)
 {
 	printf("Usage:\n"
 	       "  $ yart [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
-	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>]"
+	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>] [--sphere <sphere params> ] <mesh.obj>..."
 	       "\n"
 	       "OPTIONS:\n"
 	       "   --no-opencl  - no OpenCL hardware accelaration\n"
@@ -1812,7 +1919,15 @@ static void usage(void)
 	       "   --pitch     - initial camera pitch angle in degrees (float)\n"
 	       "   --yaw       - initial camera yaw angle in degrees (float)\n"
 	       "   --pos       - initial camera position in format x,y,z.\n"
-	       "                 e.g: '--pos 0.0,1.0,12.0'\n"
+	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
+	       "   --sphere    - sphere object, comma separated parameters:\n"
+	       "                 'r'      - sphere radius\n"
+	       "                 'albedo' - albedo\n"
+	       "                 'Kd'     - didduse  weight\n"
+	       "                 'Ks'     - specular weight\n"
+	       "                 'n'      - specular exponent\n"
+	       "                 'pos'    - spehere position\n"
+	       "                 e.g.: '--sphere r=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
 	       "\n"
 		);
 
@@ -1886,7 +2001,11 @@ int main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 			break;
-
+		case OPT_SPHERE:
+			ret = parse_sphere_options(optarg, NULL);
+			if (ret)
+				exit(EXIT_FAILURE);
+			break;
 		case '?':
 			usage();
 			break;
@@ -1894,7 +2013,6 @@ int main(int argc, char **argv)
 			usage();
 		}
 	}
-
 	if (!no_opencl) {
 		/* Init opencl context */
 		opencl = &__opencl;
@@ -1909,7 +2027,7 @@ int main(int argc, char **argv)
 	assert(scene);
 
 	/* Init default objects */
-	ret = objects_create(scene);
+	ret = objects_create(scene, argc, argv);
 	assert(!ret);
 
 	/* Init default light */
