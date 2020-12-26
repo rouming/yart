@@ -1255,7 +1255,7 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	for (i = 0; i < verts_arr_sz; i++) {
 		vec3_t *vert = &verts[i];
-		ret = fscanf(f, "%f%f%f", &vert->x, &vert->y, &vert->z);
+		ret = fscanf(f, "%f %f %f ", &vert->x, &vert->y, &vert->z);
 		assert(ret == 3);
 	}
 
@@ -1264,7 +1264,7 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	for (i = 0; i < verts_ind_arr_sz; i++) {
 		vec3_t *norm = &normals[i];
-		ret = fscanf(f, "%f%f%f", &norm->x, &norm->y, &norm->z);
+		ret = fscanf(f, "%f %f %f ", &norm->x, &norm->y, &norm->z);
 		assert(ret == 3);
 	}
 
@@ -1273,9 +1273,14 @@ static int mesh_load(struct scene *scene, const char *file,
 
 	for (i = 0; i < verts_ind_arr_sz; i++) {
 		vec2_t *coord = &st[i];
-		ret = fscanf(f, "%f%f", &coord->x, &coord->y);
+		ret = fscanf(f, "%f %f ", &coord->x, &coord->y);
 		assert(ret == 2);
 	}
+
+	pos = ftell(f);
+	fseek(f, 0, SEEK_END);
+	/* The whole file was parsed */
+	assert(pos == ftell(f));
 	fclose(f);
 
 	triangle_mesh_init(scene, mesh, o2w, num_faces, face_index,
