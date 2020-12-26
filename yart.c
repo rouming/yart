@@ -983,12 +983,12 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 				      log_size, log, NULL);
 
 		/* Print and free the log */
-		printf("%s\n", log);
+		fprintf(stderr, "%s\n", log);
 		free(log);
 
 		return -1;
 	} else if (ret) {
-		printf("clBuildProgram: failed %d\n", ret);
+		fprintf(stderr, "clBuildProgram: failed %d\n", ret);
 		return -1;
 	}
 
@@ -1222,7 +1222,10 @@ static int mesh_load(struct scene *scene, const char *file,
 	assert(mesh);
 
 	f = fopen(file, "r");
-	assert(f);
+	if (!f) {
+		fprintf(stderr, "Can't open file: %s\n", file);
+		return -EINVAL;
+	}
 
 	ret = fscanf(f, "%d", &num_faces);
 	assert(ret == 1);
@@ -1839,42 +1842,42 @@ int main(int argc, char **argv)
 		case OPT_FOV:
 			ret = sscanf(optarg, "%f", &fov);
 			if (ret != 1) {
-				printf("Invalid --fov, should be float.\n");
+				fprintf(stderr, "Invalid --fov, should be float.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case OPT_SCREEN_WIDTH:
 			ret = sscanf(optarg, "%u", &width);
 			if (ret != 1) {
-				printf("Invalid --width, should be integer.\n");
+				fprintf(stderr, "Invalid --width, should be integer.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case OPT_SCREEN_HEIGHT:
 			ret = sscanf(optarg, "%u", &height);
 			if (ret != 1) {
-				printf("Invalid --height, should be integer.\n");
+				fprintf(stderr, "Invalid --height, should be integer.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case OPT_CAM_PITCH:
 			ret = sscanf(optarg, "%f", &cam_pitch);
 			if (ret != 1) {
-				printf("Invalid --camera-pitch, should be float.\n");
+				fprintf(stderr, "Invalid --camera-pitch, should be float.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case OPT_CAM_YAW:
 			ret = sscanf(optarg, "%f", &cam_yaw);
 			if (ret != 1) {
-				printf("Invalid --camera-yaw, should be float.\n");
+				fprintf(stderr, "Invalid --camera-yaw, should be float.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case OPT_CAM_POS:
 			ret = sscanf(optarg, "%f,%f,%f", &cam_pos.x, &cam_pos.y, &cam_pos.z);
 			if (ret != 3) {
-				printf("Invalid --camera-pos, should be float,float,float.\n");
+				fprintf(stderr, "Invalid --camera-pos, should be float,float,float.\n");
 				exit(EXIT_FAILURE);
 			}
 			break;
