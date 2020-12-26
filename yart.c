@@ -1259,19 +1259,19 @@ static int mesh_load(struct scene *scene, const char *file,
 		assert(ret == 3);
 	}
 
-	normals = calloc(verts_arr_sz, sizeof(*normals));
+	normals = calloc(verts_ind_arr_sz, sizeof(*normals));
 	assert(normals);
 
-	for (i = 0; i < verts_arr_sz; i++) {
+	for (i = 0; i < verts_ind_arr_sz; i++) {
 		vec3_t *norm = &normals[i];
 		ret = fscanf(f, "%f%f%f", &norm->x, &norm->y, &norm->z);
 		assert(ret == 3);
 	}
 
-	st = calloc(verts_arr_sz, sizeof(*st));
+	st = calloc(verts_ind_arr_sz, sizeof(*st));
 	assert(st);
 
-	for (i = 0; i < verts_arr_sz; i++) {
+	for (i = 0; i < verts_ind_arr_sz; i++) {
 		vec2_t *coord = &st[i];
 		ret = fscanf(f, "%f%f", &coord->x, &coord->y);
 		assert(ret == 2);
