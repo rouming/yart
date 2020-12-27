@@ -1412,7 +1412,7 @@ static int parse_sphere_options(char *opts, struct sphere *sphere)
 				sphere_set_pos(sphere, pos);
 			break;
 		default:
-			fprintf(stderr, "Unknown sphere parameter: %s.\n",
+			fprintf(stderr, "Unknown sphere parameter: %s\n",
 				value);
 			return -EINVAL;
 		}
@@ -1424,13 +1424,22 @@ static int parse_sphere_options(char *opts, struct sphere *sphere)
 	return 0;
 }
 
+static void objects_destroy(struct scene *scene)
+{
+	struct object *obj, *tmp;
+
+	list_for_each_entry_safe(obj, tmp, &scene->objects, entry)
+		object_destroy(obj);
+}
+
 static int objects_create(struct scene *scene, int argc, char **argv)
 {
 	mat4_t o2w = m4_identity();
+	int ret = 0;
 
 	optind = 1;
 	while (1) {
-		int c, ret, option_index = 0;
+		int c, option_index = 0;
 		struct sphere *sphere;
 
 		c = getopt_long(argc, argv, "", long_options, &option_index);
@@ -1441,7 +1450,7 @@ static int objects_create(struct scene *scene, int argc, char **argv)
 		if (optind < argc && *argv[optind] != '-') {
 			ret = mesh_load(scene, argv[optind], &o2w);
 			if (ret)
-				return ret;
+				goto error;
 		}
 
 		/* Create sphere */
@@ -1453,9 +1462,11 @@ static int objects_create(struct scene *scene, int argc, char **argv)
 
 			sphere_init(sphere, &o2w, 0.9);
 
-			ret = parse_sphere_options(optarg, sphere);
-			/* Should be already parsed */
-			assert(!ret);
+			ret = parse_sphere_params(optarg, sphere);
+			if (ret) {
+				buf_destroy(sphere);
+				goto error;
+			}
 
 			list_add_tail(&sphere->obj.entry, &scene->objects);
 			break;
@@ -1465,14 +1476,10 @@ static int objects_create(struct scene *scene, int argc, char **argv)
 	}
 
 	return 0;
-}
 
-static void objects_destroy(struct scene *scene)
-{
-	struct object *obj, *tmp;
-
-	list_for_each_entry_safe(obj, tmp, &scene->objects, entry)
-		object_destroy(obj);
+error:
+	objects_destroy(scene);
+	return ret;
 }
 
 static void light_init(struct light *light, struct light_ops *ops,
@@ -2005,9 +2012,7 @@ int main(int argc, char **argv)
 			}
 			break;
 		case OPT_SPHERE:
-			ret = parse_sphere_options(optarg, NULL);
-			if (ret)
-				exit(EXIT_FAILURE);
+			/* See objects_create() */
 			break;
 		case '?':
 			usage();
@@ -2031,7 +2036,8 @@ int main(int argc, char **argv)
 
 	/* Init default objects */
 	ret = objects_create(scene, argc, argv);
-	assert(!ret);
+	if (ret)
+		goto out;
 
 	/* Init default light */
 	ret = lights_create(scene);
@@ -2046,10 +2052,11 @@ int main(int argc, char **argv)
 	else
 		render(scene);
 
+out:
 	scene_destroy(scene);
 	opencl_deinit(opencl);
 
-	return 0;
+	return ret;
 }
 
 #endif /* !__OPENCL__ */
