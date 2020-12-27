@@ -1585,11 +1585,12 @@ static int sdl_init(struct scene *scene)
 	sdl = malloc(sizeof(*sdl));
 	assert(sdl);
 
-	sdl->window = SDL_CreateWindow("", SDL_WINDOWPOS_CENTERED,
+	sdl->window = SDL_CreateWindow("YART", SDL_WINDOWPOS_CENTERED,
 				       SDL_WINDOWPOS_CENTERED,
 				       scene->width, scene->height,
-				       SDL_WINDOW_RESIZABLE);
+				       SDL_WINDOW_HIDDEN);
 	assert(sdl->window);
+
 
 	sdl->renderer = SDL_CreateRenderer(sdl->window, -1,
 					   SDL_RENDERER_PRESENTVSYNC);
@@ -1620,6 +1621,7 @@ static void sdl_deinit(struct scene *scene)
 	SDL_DestroyTexture(sdl->screen);
 	SDL_DestroyRenderer(sdl->renderer);
 	SDL_DestroyWindow(sdl->window);
+	SDL_Quit();
 	free(sdl);
 	scene->sdl = NULL;
 }
@@ -1811,6 +1813,7 @@ static void render(struct scene *scene)
 
 	SDL_SetRelativeMouseMode(SDL_TRUE);
 	SDL_StopTextInput();
+	SDL_ShowWindow(sdl->window);
 
 	ns = nsecs();
 	fps = 0;
