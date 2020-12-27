@@ -36,3 +36,20 @@ $ ./yart --sphere r=0.3,pos=-3,1,0,Ks=0.05  \
          \
          ./models/plane.geo
 ```
+
+## Example 2
+
+![Alt text](https://i.imgur.com/qLc9wzUl.png)
+
+```
+# Creates 1 sphere under 3 different point lights
+$ ./yart --sphere r=0.8,pos=0,1,0,Ks=0.05 \
+         \
+         --light pos=-2,2,1,type=point,intensity=200,color=ff0000 \
+         --light pos=0,4,1,type=point,intensity=190,color=00ff00  \
+         --light pos=2,5,1,type=point,intensity=420,color=0000ff  \
+         \
+         --pos=0,1,8 \
+         \
+         ./models/plane.geo
+```
