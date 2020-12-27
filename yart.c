@@ -69,7 +69,8 @@ typedef unsigned char uint8_t;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define SWAP(a, b) do { typeof(a) temp = a; a = b; b = temp; } while (0)
 
-#define EPSILON 1e-8
+#define EPSILON    1e-8
+#define MOVE_SPEED 0.03f
 
 struct opencl;
 struct sdl;
@@ -2068,31 +2069,32 @@ static void render(struct scene *scene)
 
 		/* Handle mouse movement */
 		if (mouse.y && mouse.x) {
-			camera_inc_angles(scene, -mouse.y * 0.05f, mouse.x * 0.05f);
+			camera_inc_angles(scene, -mouse.y * MOVE_SPEED,
+					  mouse.x * MOVE_SPEED);
 			updated_cam = true;
 		}
 
 		/* Handle keyboard */
 		if (keyb[SDL_SCANCODE_W]) {
-			cam->pos = v3_add(cam->pos, v3_muls(cam->dir, 0.1f));
+			cam->pos = v3_add(cam->pos, v3_muls(cam->dir, MOVE_SPEED));
 			updated_cam = true;
 		}
 		else if (keyb[SDL_SCANCODE_S]) {
-			cam->pos = v3_sub(cam->pos, v3_muls(cam->dir, 0.1f));
+			cam->pos = v3_sub(cam->pos, v3_muls(cam->dir, MOVE_SPEED));
 			updated_cam = true;
 		}
 		if (keyb[SDL_SCANCODE_A]) {
 			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
 			vec3_t right = v3_cross(cam->dir, up);
 
-			cam->pos = v3_sub(cam->pos, v3_muls(right, 0.1f));
+			cam->pos = v3_sub(cam->pos, v3_muls(right, MOVE_SPEED));
 			updated_cam = true;
 		}
 		else if (keyb[SDL_SCANCODE_D]) {
 			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
 			vec3_t right = v3_cross(cam->dir, up);
 
-			cam->pos = v3_add(cam->pos, v3_muls(right, 0.1f));
+			cam->pos = v3_add(cam->pos, v3_muls(right, MOVE_SPEED));
 			updated_cam = true;
 		}
 
