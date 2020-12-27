@@ -9,6 +9,7 @@
  */
 
 #ifndef __OPENCL__
+#define _GNU_SOURCE
 #include <assert.h>
 #include <float.h>
 #include <limits.h>
@@ -535,6 +536,7 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 struct light;
 
 struct light_ops {
+	void (*destroy)(struct light *light);
 	int (*unmap)(struct light *light);
 	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
@@ -548,7 +550,6 @@ struct light {
 	struct list_head entry;
 	vec3_t color;
 	float intensity;
-	mat4_t l2w;
 };
 
 struct distant_light {
@@ -1323,6 +1324,7 @@ enum {
 	OPT_CAM_YAW,
 	OPT_CAM_POS,
 
+	OPT_LIGHT,
 	OPT_SPHERE,
 };
 
@@ -1336,6 +1338,7 @@ static struct option long_options[] = {
 	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
 	{"yaw",       required_argument, 0, OPT_CAM_YAW},
 	{"pos",       required_argument, 0, OPT_CAM_POS},
+	{"light",     required_argument, 0, OPT_LIGHT},
 	{"sphere",    required_argument, 0, OPT_SPHERE},
 
 	{0, 0, 0, 0}
@@ -1360,20 +1363,18 @@ static char *const sphere_token[] = {
         NULL
 };
 
-
-static int parse_sphere_options(char *opts, struct sphere *sphere)
+static int parse_sphere_params(char *subopts, struct sphere *sphere)
 {
-	char *subopts = opts, *value;
 	int errfnd = 0, num, ret;
 	bool radius_set = false;
-	float tmp;
+	char *value;
 
 	float *sphere_opts[] = {
-		[SPHERE_RADIUS] = sphere ? &sphere->radius : &tmp,
-		[SPHERE_ALBEDO] = sphere ? &sphere->obj.albedo : &tmp,
-		[SPHERE_KD]     = sphere ? &sphere->obj.Kd : &tmp,
-		[SPHERE_KS]     = sphere ? &sphere->obj.Ks : &tmp,
-		[SPHERE_N]      = sphere ? &sphere->obj.n : &tmp,
+		[SPHERE_RADIUS] = &sphere->radius,
+		[SPHERE_ALBEDO] = &sphere->obj.albedo,
+		[SPHERE_KD]     = &sphere->obj.Kd,
+		[SPHERE_KS]     = &sphere->obj.Ks,
+		[SPHERE_N]      = &sphere->obj.n,
 	};
 	vec3_t pos;
 
@@ -1483,13 +1484,20 @@ error:
 }
 
 static void light_init(struct light *light, struct light_ops *ops,
-		       const mat4_t *l2w, const vec3_t *color, float intensity)
+		       const vec3_t *color, float intensity)
 {
 	INIT_LIST_HEAD(&light->entry);
 	light->ops = *ops;
-	light->l2w = *l2w;
 	light->color = *color;
 	light->intensity = intensity;
+}
+
+static void distant_light_destroy(struct light *light)
+{
+	struct distant_light *dlight =
+		container_of(light, struct distant_light, light);
+
+	buf_destroy(dlight);
 }
 
 static int distant_light_unmap(struct light *light)
@@ -1501,21 +1509,30 @@ static int distant_light_unmap(struct light *light)
 }
 
 struct light_ops distant_light_ops = {
+	.destroy         = distant_light_destroy,
 	.unmap		 = distant_light_unmap,
 	.illuminate	 = distant_light_illuminate,
 	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
 };
 
-static void distant_light_init(struct distant_light *dlight, const mat4_t *l2w,
-			       const vec3_t *color, float intensity)
+static void distant_light_set_dir(struct distant_light *dlight, vec3_t dir)
 {
-	vec3_t dir;
-
-	light_init(&dlight->light, &distant_light_ops, l2w, color, intensity);
-
-	dir = m4_mul_dir(*l2w, vec3(0.0f, 0.0f, -1.0f));
-	/* in case the matrix scales the light */
 	dlight->dir = v3_norm(dir);
+}
+
+static void distant_light_init(struct distant_light *dlight, const vec3_t *color,
+			       float intensity)
+{
+	light_init(&dlight->light, &distant_light_ops, color, intensity);
+	distant_light_set_dir(dlight, vec3(0.0f, 0.0f, -1.0f));
+}
+
+static void point_light_destroy(struct light *light)
+{
+	struct point_light *plight =
+		container_of(light, struct point_light, light);
+
+	buf_destroy(plight);
 }
 
 static int point_light_unmap(struct light *light)
@@ -1527,55 +1544,256 @@ static int point_light_unmap(struct light *light)
 }
 
 struct light_ops point_light_ops = {
+	.destroy         = point_light_destroy,
 	.unmap		 = point_light_unmap,
 	.illuminate	 = point_light_illuminate,
 	.illuminate_type = POINT_LIGHT_ILLUMINATE,
 };
 
-__attribute__((unused))
-static void point_light_init(struct point_light *plight, const mat4_t *l2w,
-			     const vec3_t *color, float intensity)
+static void point_light_init(struct point_light *plight, const vec3_t *color,
+			     float intensity)
 {
-	light_init(&plight->light, &point_light_ops, l2w, color, intensity);
-	plight->pos = m4_mul_pos(*l2w, vec3(0.0f, 0.0f, 0.0f));
+	light_init(&plight->light, &point_light_ops, color, intensity);
+	plight->pos = vec3(0.0f, 1.0f, 0.0f);
 }
 
-static int lights_create(struct scene *scene)
+enum {
+	LIGHT_TYPE,
+	LIGHT_COLOR,
+	LIGHT_INTENSITY,
+	LIGHT_DIR,
+	LIGHT_POS,
+};
+
+static char *const light_token[] = {
+	[LIGHT_TYPE]      = "type",
+	[LIGHT_COLOR]     = "color",
+	[LIGHT_INTENSITY] = "intensity",
+	[LIGHT_DIR]       = "dir",
+	[LIGHT_POS]       = "pos",
+};
+
+enum {
+	UNKNOWN_LIGHT = 0,
+	DISTANT_LIGHT,
+	POINT_LIGHT,
+};
+
+static int parse_light_type_param(char *subopts)
 {
-	struct distant_light *dlight;
+	int errfnd = 0, type;
+	char *value;
 
-	mat4_t l2w;
-	vec3_t color;
-	float intensity;
+	type = UNKNOWN_LIGHT;
+	while (*subopts != '\0' && !errfnd) {
+		int c = getsubopt(&subopts, light_token, &value);
 
-	l2w = mat4(11.146836, -5.781569, -0.0605886, 0,
-		   -1.902827, -3.543982, -11.895445, 0,
-		   5.459804, 10.568624, -4.02205, 0,
-		   0, 0, 0, 1);
-	/* Row-major to column-major */
-	l2w = m4_transpose(l2w);
+		switch (c) {
+		case LIGHT_TYPE:
+			if (!strcmp(value, "distant"))
+				type = DISTANT_LIGHT;
+			else if (!strcmp(value, "point"))
+				type = POINT_LIGHT;
+			else {
+				type = -EINVAL;
+				fprintf(stderr, "Invalid light type '%s'\n",
+					value);
+			}
+			break;
+		default:
+			break;
+		}
 
-	color = vec3(1.f, 1.f, 1.f);
-	intensity = 5;
+		/* Don't modify opts string in order to parse several times */
+		if (*subopts)
+			*(subopts - 1) = ',';
 
-	dlight = buf_allocate(scene->opencl, sizeof(*dlight));
-	if (!dlight)
-		return -ENOMEM;
+		if (type != UNKNOWN_LIGHT)
+			break;
+	}
 
-	distant_light_init(dlight, &l2w, &color, intensity);
-	list_add_tail(&dlight->light.entry, &scene->lights);
+	return type;
+}
+
+static int parse_light_params(char *subopts, int light_type, struct light *light)
+{
+	int errfnd = 0, ret, num;
+	char *value;
+
+	while (*subopts != '\0' && !errfnd) {
+		int c = getsubopt(&subopts, light_token, &value);
+
+		/* Don't modify opts string in order to parse several times */
+		if (c != -1 && *subopts)
+			*(subopts - 1) = ',';
+
+		switch (c) {
+		case LIGHT_TYPE:
+			/* See parse_light_type_param() */
+			break;
+		case LIGHT_COLOR: {
+			uint32_t color;
+			ret = sscanf(value, "%x", &color);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid light color, should be hex.\n");
+				return -EINVAL;
+			}
+			light->color.x = ((color>>16) & 0xff) / 255.0f;
+			light->color.y = ((color>>8) & 0xff) / 255.0f;
+			light->color.z = (color & 0xff) / 255.0f;
+			break;
+		}
+		case LIGHT_INTENSITY:
+			ret = sscanf(value, "%f", &light->intensity);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid light intensity, should be float.\n");
+				return -EINVAL;
+			}
+			break;
+		case LIGHT_DIR: {
+			struct distant_light *dlight;
+
+			if (light_type != DISTANT_LIGHT) {
+				fprintf(stderr, "Invalid parameter '%s' for this type of light.\n",
+					light_token[c]);
+				return -EINVAL;
+			}
+			dlight = container_of(light, struct distant_light, light);
+			ret = sscanf(value, "%f,%f,%f%n", &dlight->dir.x,
+				     &dlight->dir.y, &dlight->dir.z, &num);
+			if (ret != 3) {
+				fprintf(stderr, "Invalid distant light direction, should be float,float,float.\n");
+				return -EINVAL;
+			}
+			distant_light_set_dir(dlight, dlight->dir);
+			subopts = value + num;
+			if (subopts[0] == ',')
+				/* Skip trailing comma */
+				subopts += 1;
+			break;
+		}
+		case LIGHT_POS: {
+			struct point_light *plight;
+
+			if (light_type != POINT_LIGHT) {
+				fprintf(stderr, "Invalid parameter '%s' for this type of light.\n",
+					light_token[c]);
+				return -EINVAL;
+			}
+			plight = container_of(light, struct point_light, light);
+			ret = sscanf(value, "%f,%f,%f%n", &plight->pos.x,
+				     &plight->pos.y, &plight->pos.z, &num);
+			if (ret != 3) {
+				fprintf(stderr, "Invalid point light position, should be float,float,float.\n");
+				return -EINVAL;
+			}
+			subopts = value + num;
+			if (subopts[0] == ',')
+				/* Skip trailing comma */
+				subopts += 1;
+			break;
+		}
+		default:
+			fprintf(stderr, "Unknown light parameter: %s\n",
+				value);
+			return -EINVAL;
+		}
+	}
 
 	return 0;
+}
+
+
+static void light_destroy(struct light *light)
+{
+	list_del(&light->entry);
+	light->ops.destroy(light);
 }
 
 static void lights_destroy(struct scene *scene)
 {
 	struct light *light, *tmp;
 
-	list_for_each_entry_safe(light, tmp, &scene->lights, entry) {
-		list_del(&light->entry);
-		buf_destroy(light);
+	list_for_each_entry_safe(light, tmp, &scene->lights, entry)
+		light_destroy(light);
+}
+
+static struct light *light_create(struct opencl *opencl, int light_type)
+{
+	vec3_t color = vec3(1.0f, 1.0f, 1.0f);
+	float intensity = 5.0f;
+
+	switch (light_type) {
+	case DISTANT_LIGHT: {
+		struct distant_light *dlight;
+
+		dlight =  buf_allocate(opencl, sizeof(*dlight));
+		distant_light_init(dlight, &color, intensity);
+		return &dlight->light;
 	}
+	case POINT_LIGHT: {
+		struct point_light *plight;
+
+		plight =  buf_allocate(opencl, sizeof(*plight));
+		point_light_init(plight, &color, intensity);
+		return &plight->light;
+	}
+	default:
+		assert(0);
+		return NULL;
+	}
+}
+
+static int lights_create(struct scene *scene, int argc, char **argv)
+{
+	int ret = 0;
+
+	optind = 1;
+	while (1) {
+		int c, option_index = 0;
+		int light_type;
+
+		struct light *light;
+
+		c = getopt_long(argc, argv, "", long_options, &option_index);
+		if (c == -1)
+			break;
+
+		/* Create light */
+		switch (c) {
+		case OPT_LIGHT:
+			light_type = parse_light_type_param(optarg);
+			if (light_type < 0) {
+				ret = light_type;
+				goto error;
+			}
+			if (light_type == UNKNOWN_LIGHT) {
+				fprintf(stderr, "Light type is not specified\n");
+				ret = -EINVAL;
+				goto error;
+			}
+			light = light_create(scene->opencl, light_type);
+			if (!light) {
+				ret = -ENOMEM;
+				goto error;
+			}
+			ret = parse_light_params(optarg, light_type, light);
+			if (ret) {
+				light_destroy(light);
+				goto error;
+			}
+			list_add_tail(&light->entry, &scene->lights);
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 0;
+
+error:
+	lights_destroy(scene);
+	return ret;
 }
 
 static int sdl_init(struct scene *scene)
@@ -1930,6 +2148,17 @@ static void usage(void)
 	       "   --yaw       - initial camera yaw angle in degrees (float)\n"
 	       "   --pos       - initial camera position in format x,y,z.\n"
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
+	       "\n"
+	       "   --light     - light object, comma separated parameters:\n"
+	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
+	       "                               can be specified\n"
+	       "                 'color'     - RGB color in hex, e.g. for red ff0000\n"
+	       "                 'intensity' - light intensity, should be float\n"
+	       "              Distant light:\n"
+	       "                 'dir'       - direction vector of light in infinity\n"
+	       "              Point light:\n"
+	       "                 'pos'        - position of the point light\n"
+	       "\n"
 	       "   --sphere    - sphere object, comma separated parameters:\n"
 	       "                 'r'      - sphere radius\n"
 	       "                 'albedo' - albedo\n"
@@ -2011,6 +2240,9 @@ int main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 			break;
+		case OPT_LIGHT:
+			/* See lights_create() */
+			break;
 		case OPT_SPHERE:
 			/* See objects_create() */
 			break;
@@ -2039,9 +2271,10 @@ int main(int argc, char **argv)
 	if (ret)
 		goto out;
 
-	/* Init default light */
-	ret = lights_create(scene);
-	assert(!ret);
+	/* Init default lights */
+	ret = lights_create(scene, argc, argv);
+	if (ret)
+		goto out;
 
 	/* Commit all scene changes before rendering */
 	ret = scene_finish(scene);

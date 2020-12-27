@@ -22,12 +22,15 @@ the mouse and walk with WASD keys.
 ![Alt text](https://i.imgur.com/paKdHNp.gif)
 
 ```
-# Creates 4 different spheres on 1 plane. Camera is set to the position
-# with pitch and yaw angles
+# Creates 4 different spheres on 1 plane under distant light with
+# specified direction. Camera is set to the position with pitch and
+# yaw angles
 $ ./yart --sphere r=0.3,pos=-3,1,0,Ks=0.05  \
          --sphere r=0.5,pos=-2,1,0,Ks=0.08  \
          --sphere r=0.7,pos=-0.5,1,0,Ks=0.1 \
          --sphere r=0.9,pos=1.4,1,0,Ks=0.4  \
+         \
+         --light dir=-0.4,-0.8,0.3,type=distant \
          \
          --pitch -10 --yaw -55 --pos 10,3,7 \
          \
