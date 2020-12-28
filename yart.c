@@ -1043,20 +1043,6 @@ static void opencl_invoke(struct scene *scene)
 	assert(!ret);
 }
 
-static void object_init(struct object *obj, struct object_ops *ops,
-			const mat4_t *o2w)
-{
-	INIT_LIST_HEAD(&obj->entry);
-	obj->ops = *ops;
-	obj->o2w = *o2w;
-	obj->w2o = m4_invert_affine(obj->o2w);
-	obj->material = MATERIAL_PHONG;
-	obj->albedo = 0.18f;
-	obj->Kd = 0.8f;
-	obj->Ks = 0.2f;
-	obj->n = 10.0f;
-}
-
 static void object_destroy(struct object *obj)
 {
 	list_del(&obj->entry);
@@ -1088,28 +1074,6 @@ struct object_ops sphere_ops = {
 	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
-static void sphere_set_radius(struct sphere *sphere, float radius)
-{
-	sphere->radius = radius;
-	sphere->radius_pow2 = radius * radius;
-}
-
-static void sphere_set_pos(struct sphere *sphere, vec3_t pos)
-{
-	sphere->obj.o2w.m30 = pos.x;
-	sphere->obj.o2w.m31 = pos.y;
-	sphere->obj.o2w.m32 = pos.z;
-	sphere->center = pos;
-}
-
-static void sphere_init(struct sphere *sphere, const mat4_t *o2w, float radius)
-{
-	object_init(&sphere->obj, &sphere_ops, o2w);
-
-	sphere_set_radius(sphere, radius);
-	sphere->center = m4_mul_pos(*o2w, vec3(0.0f, 0.0f, 0.0f));
-}
-
 static void triangle_mesh_destroy(struct object *obj)
 {
 	struct triangle_mesh *mesh =
@@ -1139,175 +1103,6 @@ struct object_ops triangle_mesh_ops = {
 	.get_surface_props_type = TRIANGLE_MESH_GET_SURFACE_PROPS,
 
 };
-
-static void triangle_mesh_init(struct opencl *opencl, struct triangle_mesh *mesh,
-			       const mat4_t *o2w, uint32_t nfaces, uint32_t *face_index,
-			       uint32_t *verts_index, vec3_t *verts,
-			       vec3_t *normals, vec2_t *st)
-{
-	uint32_t i, j, l, k = 0, max_vert_index = 0;
-	uint32_t num_tris = 0;
-
-	uint32_t *tris_index;
-	vec3_t *P, *N;
-	vec2_t *sts;
-
-	mat4_t transform_normals;
-
-	/* find out how many triangles we need to create for this mesh */
-	for (i = 0; i < nfaces; ++i) {
-		num_tris += face_index[i] - 2;
-		for (j = 0; j < face_index[i]; ++j) {
-			if (verts_index[k + j] > max_vert_index)
-				max_vert_index = verts_index[k + j];
-		}
-		k += face_index[i];
-	}
-	max_vert_index += 1;
-
-	/* allocate memory to store the position of the mesh vertices */
-	P = buf_allocate(opencl, max_vert_index * sizeof(*P));
-	assert(P);
-
-	/* Transform vertices to world space */
-	for (i = 0; i < max_vert_index; ++i)
-		P[i] = m4_mul_pos(*o2w, verts[i]);
-
-	tris_index = buf_allocate(opencl, num_tris * 3 * sizeof(*tris_index));
-	assert(tris_index);
-
-	N = buf_allocate(opencl, num_tris * 3 * sizeof(*N));
-	assert(N);
-
-	sts = buf_allocate(opencl, num_tris * 3 * sizeof(*sts));
-	assert(sts);
-
-	/* Computing the transpse of the object-to-world inverse matrix */
-	transform_normals = m4_transpose(mesh->obj.w2o);
-
-	/* Generate the triangle index array and set normals and st coordinates */
-	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
-		/* Each triangle in a face */
-		for (j = 0; j < face_index[i] - 2; j++) {
-			tris_index[l + 0] = verts_index[k];
-			tris_index[l + 1] = verts_index[k + j + 1];
-			tris_index[l + 2] = verts_index[k + j + 2];
-
-			/* Transforming normals */
-			N[l + 0] = m4_mul_dir(transform_normals, normals[k]);
-			N[l + 1] = m4_mul_dir(transform_normals, normals[k + j + 1]);
-			N[l + 2] = m4_mul_dir(transform_normals, normals[k + j + 2]);
-
-			N[l + 0] = v3_norm(N[l + 0]);
-			N[l + 1] = v3_norm(N[l + 1]);
-			N[l + 2] = v3_norm(N[l + 2]);
-
-			sts[l + 0] = st[k];
-			sts[l + 1] = st[k + j + 1];
-			sts[l + 2] = st[k + j + 2];
-			l += 3;
-		}
-		k += face_index[i];
-	}
-
-	mesh->num_tris = num_tris;
-	mesh->P = P;
-	mesh->tris_index = tris_index;
-	mesh->N = N;
-	mesh->sts = sts;
-
-	/* Not supposed to changed by the host, so unmap */
-	buf_unmap(P);
-	buf_unmap(tris_index);
-	buf_unmap(N);
-	buf_unmap(sts);
-}
-
-static int triangle_mesh_load(struct opencl *opencl, const char *file,
-			      const mat4_t *o2w, struct triangle_mesh *mesh)
-{
-	uint32_t num_faces, verts_ind_arr_sz, verts_arr_sz;
-	int ret, i;
-	size_t pos;
-	FILE *f;
-
-	uint32_t *face_index, *verts_index;
-	vec3_t *verts, *normals;
-	vec2_t *st;
-
-	f = fopen(file, "r");
-	if (!f) {
-		fprintf(stderr, "Can't open file: %s\n", file);
-		return -EINVAL;
-	}
-
-	ret = fscanf(f, "%d", &num_faces);
-	assert(ret == 1);
-
-	face_index = calloc(num_faces, sizeof(*face_index));
-	assert(face_index);
-
-	for (i = 0, verts_ind_arr_sz = 0; i < num_faces; i++) {
-		ret = fscanf(f, "%d", &face_index[i]);
-		assert(ret == 1);
-		verts_ind_arr_sz += face_index[i];
-	}
-
-	verts_index = calloc(verts_ind_arr_sz, sizeof(*verts_index));
-	assert(verts_index);
-
-	for (i = 0, verts_arr_sz = 0; i < verts_ind_arr_sz; i++) {
-		ret = fscanf(f, "%d", &verts_index[i]);
-		assert(ret == 1);
-		if (verts_index[i] > verts_arr_sz)
-			verts_arr_sz = verts_index[i];
-	}
-	verts_arr_sz += 1;
-
-	verts = calloc(verts_arr_sz, sizeof(*verts));
-	assert(verts);
-
-	for (i = 0; i < verts_arr_sz; i++) {
-		vec3_t *vert = &verts[i];
-		ret = fscanf(f, "%f %f %f ", &vert->x, &vert->y, &vert->z);
-		assert(ret == 3);
-	}
-
-	normals = calloc(verts_ind_arr_sz, sizeof(*normals));
-	assert(normals);
-
-	for (i = 0; i < verts_ind_arr_sz; i++) {
-		vec3_t *norm = &normals[i];
-		ret = fscanf(f, "%f %f %f ", &norm->x, &norm->y, &norm->z);
-		assert(ret == 3);
-	}
-
-	st = calloc(verts_ind_arr_sz, sizeof(*st));
-	assert(st);
-
-	for (i = 0; i < verts_ind_arr_sz; i++) {
-		vec2_t *coord = &st[i];
-		ret = fscanf(f, "%f %f ", &coord->x, &coord->y);
-		assert(ret == 2);
-	}
-
-	pos = ftell(f);
-	fseek(f, 0, SEEK_END);
-	/* The whole file was parsed */
-	assert(pos == ftell(f));
-	fclose(f);
-
-	triangle_mesh_init(opencl, mesh, o2w, num_faces, face_index,
-			   verts_index, verts, normals, st);
-
-	free(face_index);
-	free(verts_index);
-	free(verts);
-	free(normals);
-	free(st);
-
-	return 0;
-}
 
 static int no_opencl;
 static int one_frame;
@@ -1370,140 +1165,346 @@ enum {
 	MESH_OBJECT,
 };
 
-static int parse_object_type_param(char *subopts)
+struct object_params {
+	int    parsed_params_bits;
+	mat4_t o2w;
+	int    type;
+	float  albedo;
+	float  Kd;
+	float  Ks;
+	float  n;
+	struct {
+		char  file[512];
+	} mesh;
+	struct {
+		float  radius;
+		vec3_t pos;
+	} sphere;
+};
+
+static void default_object_params(struct object_params *params)
 {
-	int errfnd = 0, type;
-	char *value;
-
-	type = UNKNOWN_OBJECT;
-	while (*subopts != '\0' && !errfnd) {
-		int c = getsubopt(&subopts, object_token, &value);
-
-		switch (c) {
-		case OBJECT_TYPE:
-			if (!strcmp(value, "sphere"))
-				type = SPHERE_OBJECT;
-			else if (!strcmp(value, "mesh"))
-				type = MESH_OBJECT;
-			else {
-				type = -EINVAL;
-				fprintf(stderr, "Invalid object type '%s'\n",
-					value);
-			}
-			break;
-		default:
-			break;
-		}
-
-		/* Don't modify opts string in order to parse several times */
-		if (*subopts)
-			*(subopts - 1) = ',';
-
-		if (type != UNKNOWN_OBJECT)
-			break;
-	}
-
-	return type;
+	memset(params, 0, sizeof(*params));
+	params->albedo = 0.18f;
+	params->Kd = 0.8f;
+	params->Ks = 0.2f;
+	params->n = 10.0f;
+	params->sphere.radius = 0.5f;
+	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
+	params->o2w = m4_identity();
 }
 
-static int parse_object_params(struct scene *scene, char *subopts,
-			       int obj_type, struct object *obj)
+static void object_init(struct object *obj, struct object_ops *ops,
+			struct object_params *params)
+{
+	INIT_LIST_HEAD(&obj->entry);
+	obj->ops = *ops;
+	obj->o2w = params->o2w;
+	obj->w2o = m4_invert_affine(obj->o2w);
+	obj->material = MATERIAL_PHONG;
+	obj->albedo = params->albedo;
+	obj->Kd = params->Kd;
+	obj->Ks = params->Ks;
+	obj->n = params->n;
+}
+
+static void sphere_set_radius(struct sphere *sphere, float radius)
+{
+	sphere->radius = radius;
+	sphere->radius_pow2 = radius * radius;
+}
+
+static void sphere_set_pos(struct sphere *sphere, vec3_t pos)
+{
+	sphere->obj.o2w.m30 = pos.x;
+	sphere->obj.o2w.m31 = pos.y;
+	sphere->obj.o2w.m32 = pos.z;
+	sphere->center = pos;
+}
+
+static void sphere_init(struct sphere *sphere, struct object_params *params)
+{
+	object_init(&sphere->obj, &sphere_ops, params);
+	sphere_set_radius(sphere, params->sphere.radius);
+	sphere_set_pos(sphere, params->sphere.pos);
+}
+
+
+static void triangle_mesh_init(struct opencl *opencl, struct object_params *params,
+			       struct triangle_mesh *mesh, uint32_t nfaces,
+			       uint32_t *face_index, uint32_t *verts_index,
+			       vec3_t *verts, vec3_t *normals, vec2_t *st)
+{
+	uint32_t i, j, l, k = 0, max_vert_index = 0;
+	uint32_t num_tris = 0;
+
+	uint32_t *tris_index;
+	vec3_t *P, *N;
+	vec2_t *sts;
+
+	mat4_t transform_normals;
+
+	/* find out how many triangles we need to create for this mesh */
+	for (i = 0; i < nfaces; ++i) {
+		num_tris += face_index[i] - 2;
+		for (j = 0; j < face_index[i]; ++j) {
+			if (verts_index[k + j] > max_vert_index)
+				max_vert_index = verts_index[k + j];
+		}
+		k += face_index[i];
+	}
+	max_vert_index += 1;
+
+	/* allocate memory to store the position of the mesh vertices */
+	P = buf_allocate(opencl, max_vert_index * sizeof(*P));
+	assert(P);
+
+	/* Transform vertices to world space */
+	for (i = 0; i < max_vert_index; ++i)
+		P[i] = m4_mul_pos(params->o2w, verts[i]);
+
+	tris_index = buf_allocate(opencl, num_tris * 3 * sizeof(*tris_index));
+	assert(tris_index);
+
+	N = buf_allocate(opencl, num_tris * 3 * sizeof(*N));
+	assert(N);
+
+	sts = buf_allocate(opencl, num_tris * 3 * sizeof(*sts));
+	assert(sts);
+
+	/* Init object */
+	object_init(&mesh->obj, &triangle_mesh_ops, params);
+
+	/* Computing the transpse of the object-to-world inverse matrix */
+	transform_normals = m4_transpose(mesh->obj.w2o);
+
+	/* Generate the triangle index array and set normals and st coordinates */
+	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
+		/* Each triangle in a face */
+		for (j = 0; j < face_index[i] - 2; j++) {
+			tris_index[l + 0] = verts_index[k];
+			tris_index[l + 1] = verts_index[k + j + 1];
+			tris_index[l + 2] = verts_index[k + j + 2];
+
+			/* Transforming normals */
+			N[l + 0] = m4_mul_dir(transform_normals, normals[k]);
+			N[l + 1] = m4_mul_dir(transform_normals, normals[k + j + 1]);
+			N[l + 2] = m4_mul_dir(transform_normals, normals[k + j + 2]);
+
+			N[l + 0] = v3_norm(N[l + 0]);
+			N[l + 1] = v3_norm(N[l + 1]);
+			N[l + 2] = v3_norm(N[l + 2]);
+
+			sts[l + 0] = st[k];
+			sts[l + 1] = st[k + j + 1];
+			sts[l + 2] = st[k + j + 2];
+			l += 3;
+		}
+		k += face_index[i];
+	}
+
+	mesh->num_tris = num_tris;
+	mesh->P = P;
+	mesh->tris_index = tris_index;
+	mesh->N = N;
+	mesh->sts = sts;
+
+	/* Not supposed to changed by the host, so unmap */
+	buf_unmap(P);
+	buf_unmap(tris_index);
+	buf_unmap(N);
+	buf_unmap(sts);
+}
+
+static int triangle_mesh_load_geo(struct scene *scene,
+				  struct object_params *params)
+{
+	uint32_t num_faces, verts_ind_arr_sz, verts_arr_sz;
+	int ret, i;
+	size_t pos;
+	FILE *f;
+
+	uint32_t *face_index, *verts_index;
+	vec3_t *verts, *normals;
+	vec2_t *st;
+
+	struct triangle_mesh *mesh;
+
+	f = fopen(params->mesh.file, "r");
+	if (!f) {
+		fprintf(stderr, "Can't open file: %s\n", params->mesh.file);
+		return -EINVAL;
+	}
+
+	ret = fscanf(f, "%d", &num_faces);
+	assert(ret == 1);
+
+	face_index = calloc(num_faces, sizeof(*face_index));
+	assert(face_index);
+
+	for (i = 0, verts_ind_arr_sz = 0; i < num_faces; i++) {
+		ret = fscanf(f, "%d", &face_index[i]);
+		assert(ret == 1);
+		verts_ind_arr_sz += face_index[i];
+	}
+
+	verts_index = calloc(verts_ind_arr_sz, sizeof(*verts_index));
+	assert(verts_index);
+
+	for (i = 0, verts_arr_sz = 0; i < verts_ind_arr_sz; i++) {
+		ret = fscanf(f, "%d", &verts_index[i]);
+		assert(ret == 1);
+		if (verts_index[i] > verts_arr_sz)
+			verts_arr_sz = verts_index[i];
+	}
+	verts_arr_sz += 1;
+
+	verts = calloc(verts_arr_sz, sizeof(*verts));
+	assert(verts);
+
+	for (i = 0; i < verts_arr_sz; i++) {
+		vec3_t *vert = &verts[i];
+		ret = fscanf(f, "%f %f %f ", &vert->x, &vert->y, &vert->z);
+		assert(ret == 3);
+	}
+
+	normals = calloc(verts_ind_arr_sz, sizeof(*normals));
+	assert(normals);
+
+	for (i = 0; i < verts_ind_arr_sz; i++) {
+		vec3_t *norm = &normals[i];
+		ret = fscanf(f, "%f %f %f ", &norm->x, &norm->y, &norm->z);
+		assert(ret == 3);
+	}
+
+	st = calloc(verts_ind_arr_sz, sizeof(*st));
+	assert(st);
+
+	for (i = 0; i < verts_ind_arr_sz; i++) {
+		vec2_t *coord = &st[i];
+		ret = fscanf(f, "%f %f ", &coord->x, &coord->y);
+		assert(ret == 2);
+	}
+
+	pos = ftell(f);
+	fseek(f, 0, SEEK_END);
+	/* The whole file was parsed */
+	assert(pos == ftell(f));
+	fclose(f);
+
+	mesh = buf_allocate(scene->opencl, sizeof(*mesh));
+	if (!mesh) {
+		ret = -EINVAL;
+		goto error;
+	}
+
+	triangle_mesh_init(scene->opencl, params, mesh, num_faces, face_index,
+			   verts_index, verts, normals, st);
+	list_add_tail(&mesh->obj.entry, &scene->objects);
+	ret = 0;
+
+error:
+	free(face_index);
+	free(verts_index);
+	free(verts);
+	free(normals);
+	free(st);
+
+	return ret;
+}
+
+static int triangle_mesh_load_obj(struct scene *scene,
+				  struct object_params *params)
+{
+	return -EINVAL;
+}
+
+static bool is_parsed_object_param(struct object_params *params, int t)
+{
+	return params->parsed_params_bits & (1<<t);
+}
+
+static int parse_object_params(char *subopts, struct object_params *params)
 {
 	int errfnd = 0, num, ret;
-	bool mesh_loaded = false;
 	char *value;
 
-	float *object_opts[] = {
-		[OBJECT_ALBEDO] = &obj->albedo,
-		[OBJECT_KD]     = &obj->Kd,
-		[OBJECT_KS]     = &obj->Ks,
-		[OBJECT_N]      = &obj->n,
-	};
+	default_object_params(params);
 
 	while (*subopts != '\0' && !errfnd) {
+		char *real_value;
+		float *fptr = NULL;
+
 		int c = getsubopt(&subopts, object_token, &value);
 
-		/* Don't modify opts string in order to parse several times */
+		/*
+		 * Return comma to the string in order to parse several times,
+		 * but keep real value as dupa.
+		 */
+		real_value = strdupa(value);
 		if (c != -1 && *subopts)
 			*(subopts - 1) = ',';
 
 		switch (c) {
 		case OBJECT_TYPE:
-			/* See parse_object_type_param() */
+			if (!strcmp(real_value, "sphere"))
+				params->type = SPHERE_OBJECT;
+			else if (!strcmp(real_value, "mesh"))
+				params->type = MESH_OBJECT;
+			else {
+				fprintf(stderr, "Invalid object type '%s'\n",
+					real_value);
+				return -EINVAL;
+			}
 			break;
 		case OBJECT_ALBEDO:
+			fptr = &params->albedo;
+			break;
 		case OBJECT_KD:
+			fptr = &params->Kd;
+			break;
 		case OBJECT_KS:
+			fptr = &params->Ks;
+			break;
 		case OBJECT_N:
-			ret = sscanf(value, "%f", object_opts[c]);
-			if (ret != 1) {
-				fprintf(stderr, "Invald sphere option %s\n", value);
-				return -EINVAL;
-			}
+			fptr = &params->n;
 			break;
 		case OBJECT_SPHERE_RADIUS: {
-			struct sphere *sphere;
-			float radius;
-
-			if (obj_type != SPHERE_OBJECT) {
-				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
-					object_token[c]);
-				return -EINVAL;
-			}
-			ret = sscanf(value, "%f", &radius);
-			if (ret != 1) {
-				fprintf(stderr, "Invald sphere option %s\n", value);
-				return -EINVAL;
-			}
-			sphere = container_of(obj, typeof(*sphere), obj);
-			sphere_set_radius(sphere, radius);
+			fptr = &params->sphere.radius;
 			break;
 		}
 		case OBJECT_SPHERE_POS: {
-			struct sphere *sphere;
-			vec3_t pos;
-
-			if (obj_type != SPHERE_OBJECT) {
-				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
-					object_token[c]);
-				return -EINVAL;
-			}
-			ret = sscanf(value, "%f,%f,%f%n", &pos.x, &pos.y, &pos.z,
+			ret = sscanf(value, "%f,%f,%f%n", &params->sphere.pos.x,
+				     &params->sphere.pos.y, &params->sphere.pos.z,
 				     &num);
 			if (ret != 3) {
-				fprintf(stderr, "Invald sphere pos\n");
+				fprintf(stderr, "Invalid object '%s' parameter\n",
+					object_token[c]);
 				return -EINVAL;
 			}
 			subopts = value + num;
 			if (subopts[0] == ',')
 				/* Skip trailing comma */
 				subopts += 1;
-
-			sphere = container_of(obj, typeof(*sphere), obj);
-			sphere_set_pos(sphere, pos);
 			break;
 		}
 		case OBJECT_MESH_FILE: {
-			struct triangle_mesh *mesh;
-			mat4_t o2w = m4_identity();
 			char *file;
 
-			if (obj_type != MESH_OBJECT) {
-				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
+			ret = sscanf(value, "%m[^,]", &file);
+			if (ret != 1) {
+				fprintf(stderr, "Invald object '%s' parameter\n",
 					object_token[c]);
 				return -EINVAL;
 			}
-			ret = sscanf(value, "%m[^,]", &file);
-			if (ret != 1) {
-				fprintf(stderr, "Invald object 'file' parameter\n");
+			ret = snprintf(params->mesh.file, sizeof(params->mesh.file),
+				       "%s", file);
+			free(file);
+			if (ret >= sizeof(params->mesh.file)) {
+				fprintf(stderr, "Object '%s' parameter is too big\n",
+					object_token[c]);
 				return -EINVAL;
 			}
-			mesh = container_of(obj, typeof(*mesh), obj);
-			ret = triangle_mesh_load(scene->opencl, file, &o2w, mesh);
-			free(file);
-			if (ret)
-				return ret;
-			mesh_loaded = true;
 			break;
 		}
 		default:
@@ -1511,9 +1512,49 @@ static int parse_object_params(struct scene *scene, char *subopts,
 				value);
 			return -EINVAL;
 		}
+		/* Common param */
+		if (fptr) {
+			ret = sscanf(value, "%f", fptr);
+			if (ret != 1) {
+				fprintf(stderr, "Invald object '%s' parameter\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+		}
+		params->parsed_params_bits |= (1<<c);
 	}
-	if (obj_type == MESH_OBJECT && !mesh_loaded) {
-		fprintf(stderr, "Required parameter 'file' for 'mesh' object is not specified.\n");
+
+	/* Validate parameters */
+	if (!is_parsed_object_param(params, OBJECT_TYPE)) {
+		fprintf(stderr, "Object type is not specified\n");
+		return -EINVAL;
+	}
+	switch (params->type) {
+	case SPHERE_OBJECT:
+		if (is_parsed_object_param(params, OBJECT_MESH_FILE)) {
+			fprintf(stderr, "Invalid parameter '%s' for 'sphere' object type\n",
+				object_token[OBJECT_MESH_FILE]);
+			return -EINVAL;
+		}
+		break;
+	case MESH_OBJECT:
+		if (!is_parsed_object_param(params, OBJECT_MESH_FILE)) {
+			fprintf(stderr, "Required parameter 'file' for 'mesh' object is not specified\n");
+			return -EINVAL;
+		}
+		if (is_parsed_object_param(params, OBJECT_SPHERE_RADIUS)) {
+			fprintf(stderr, "Invalid parameter '%s' for 'mesh' object type\n",
+				object_token[OBJECT_SPHERE_RADIUS]);
+			return -EINVAL;
+		}
+		if (is_parsed_object_param(params, OBJECT_SPHERE_POS)) {
+			fprintf(stderr, "Invalid parameter '%s' for 'mesh' object type\n",
+				object_token[OBJECT_SPHERE_POS]);
+			return -EINVAL;
+		}
+		break;
+	default:
+		fprintf(stderr, "Unknown object type\n");
 		return -EINVAL;
 	}
 
@@ -1528,46 +1569,47 @@ static void objects_destroy(struct scene *scene)
 		object_destroy(obj);
 }
 
-static struct object *object_create(struct opencl *opencl, int obj_type)
+static int objects_create_from_params(struct scene *scene,
+				      struct object_params *params)
 {
-	mat4_t o2w = m4_identity();
-
-	switch (obj_type) {
+	switch (params->type) {
 	case SPHERE_OBJECT: {
 		struct sphere *sphere;
-		float radius = 0.5f;
 
-		sphere = buf_allocate(opencl, sizeof(*sphere));
+		sphere = buf_allocate(scene->opencl, sizeof(*sphere));
 		if (!sphere)
-			return NULL;
-		sphere_init(sphere, &o2w, radius);
-		return &sphere->obj;
+			return -ENOMEM;
+		sphere_init(sphere, params);
+		list_add_tail(&sphere->obj.entry, &scene->objects);
+		return 0;
 	}
 	case MESH_OBJECT: {
-		struct triangle_mesh *mesh;
+		int len = strlen(params->mesh.file);
 
-		mesh = buf_allocate(opencl, sizeof(*mesh));
-		if (!mesh)
-			return NULL;
-		object_init(&mesh->obj, &triangle_mesh_ops, &o2w);
-		return &mesh->obj;
+		if (len > 3 &&
+		    !strcmp(params->mesh.file + len - 4, ".geo")) {
+			return triangle_mesh_load_geo(scene, params);
+		} else if (len > 3 &&
+			   !strcmp(params->mesh.file + len - 4, ".obj")) {
+			return triangle_mesh_load_obj(scene, params);
+		}
+		fprintf(stderr, "Invalid object file extension\n");
+		return -EINVAL;
 	}
 	default:
+		/* Params already validated */
 		assert(0);
-		return NULL;
+		return -EINVAL;
 	}
 }
 
 static int objects_create(struct scene *scene, int argc, char **argv)
 {
-	int ret = 0;
+	int ret;
 
 	optind = 1;
 	while (1) {
 		int c, option_index = 0;
-		int obj_type;
-
-		struct object *obj;
 
 		c = getopt_long(argc, argv, "", long_options, &option_index);
 		if (c == -1)
@@ -1575,29 +1617,17 @@ static int objects_create(struct scene *scene, int argc, char **argv)
 
 		/* Create object */
 		switch (c) {
-		case OPT_OBJECT:
-			obj_type = parse_object_type_param(optarg);
-			if (obj_type < 0) {
-				ret = obj_type;
+		case OPT_OBJECT: {
+			struct object_params params;
+
+			ret = parse_object_params(optarg, &params);
+			if (ret)
 				goto error;
-			}
-			if (obj_type == UNKNOWN_OBJECT) {
-				fprintf(stderr, "Object type is not specified\n");
-				ret = -EINVAL;
+			ret = objects_create_from_params(scene, &params);
+			if (ret)
 				goto error;
-			}
-			obj = object_create(scene->opencl, obj_type);
-			if (!obj) {
-				ret = -ENOMEM;
-				goto error;
-			}
-			ret = parse_object_params(scene, optarg, obj_type, obj);
-			if (ret) {
-				object_destroy(obj);
-				goto error;
-			}
-			list_add_tail(&obj->entry, &scene->objects);
 			break;
+		}
 		default:
 			break;
 		}
@@ -1829,7 +1859,6 @@ static int parse_light_params(char *subopts, int light_type, struct light *light
 
 	return 0;
 }
-
 
 static void light_destroy(struct light *light)
 {
