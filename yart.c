@@ -29,6 +29,7 @@
 #include <CL/cl.h>
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 
 #define __global
 
@@ -44,8 +45,9 @@
 
 struct scene;
 
-typedef unsigned int uint32_t;
-typedef int	     int32_t;
+typedef unsigned long uint64_t;
+typedef unsigned int  uint32_t;
+typedef int	      int32_t;
 
 typedef unsigned char uint8_t;
 
@@ -1807,6 +1809,12 @@ static int sdl_init(struct scene *scene)
 		printf("Can't init SDL\n");
 		return -1;
 	}
+	ret = TTF_Init();
+	if (ret) {
+		SDL_Quit();
+		printf("Can't init TTF\n");
+		return -1;
+	}
 
 	sdl = malloc(sizeof(*sdl));
 	assert(sdl);
@@ -1847,6 +1855,7 @@ static void sdl_deinit(struct scene *scene)
 	SDL_DestroyTexture(sdl->screen);
 	SDL_DestroyRenderer(sdl->renderer);
 	SDL_DestroyWindow(sdl->window);
+	TTF_Quit();
 	SDL_Quit();
 	free(sdl);
 	scene->sdl = NULL;
@@ -2031,18 +2040,130 @@ static void one_frame_render(struct scene *scene)
 	assert(!ret);
 }
 
+/**
+ * Welford's online algorithm
+ * https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+ */
+struct welford_state {
+	uint64_t count;
+	float mean, m2;
+};
+
+static float avg_welford(struct welford_state *s, float new_value)
+{
+	float delta, delta2;
+
+	s->count += 1;
+	delta = new_value - s->mean;
+	s->mean += delta / s->count;
+	delta2 = new_value - s->mean;
+	s->m2 += delta * delta2;
+
+	return s->mean;
+}
+
+static float scene_average_fps(struct scene *scene)
+{
+	static struct welford_state s;
+	static uint64_t render_ns;
+	float fps = 0;
+
+	if (render_ns) {
+		fps = 1000000000.0f / (nsecs() - render_ns);
+		fps = avg_welford(&s, fps);
+	}
+	render_ns = nsecs();
+
+	return fps;
+}
+
+static void draw_scene_status(struct scene *scene)
+{
+	SDL_Renderer *renderer = scene->sdl->renderer;
+	SDL_Surface *rect_surface, *text_surface;
+	SDL_Texture *text;
+	TTF_Font *font;
+	SDL_Rect r, rr;
+
+	SDL_Color color = { 0xaa, 0xaa, 0xaa};
+
+	char buf[512];
+
+	r.x = scene->width - 120;
+	r.y = 0;
+	r.w = 120;
+	r.h = 120;
+
+	rect_surface = SDL_CreateRGBSurfaceWithFormat(0, 300, 400, 32,
+						      SDL_PIXELFORMAT_RGBA8888);
+	assert(rect_surface);
+
+	SDL_SetRenderDrawColor(scene->sdl->renderer, 0x60, 0x60, 0x60, 0x90);
+	SDL_RenderFillRect(renderer, &r);
+
+	font = TTF_OpenFont("fonts/FreeMono.ttf", 14);
+	assert(font);
+
+	snprintf(buf, sizeof(buf), "    X %8.3f", scene->cam.pos.x);
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 0, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "    Y %8.3f", scene->cam.pos.y);
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 15, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "    Z %8.3f", scene->cam.pos.z);
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 30, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "Pitch %8.3f", scene->cam.pitch);
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 50, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "  Yaw %8.3f", scene->cam.yaw);
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 65, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "  FPS %8.0f", scene_average_fps(scene));
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 85, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	text = SDL_CreateTextureFromSurface(renderer, rect_surface);
+	assert(text);
+	r = (SDL_Rect){ scene->width - 115, 10, rect_surface->w, rect_surface->h };
+	SDL_FreeSurface(rect_surface);
+	SDL_RenderCopy(renderer, text, NULL, &r);
+	SDL_DestroyTexture(text);
+
+	TTF_CloseFont(font);
+}
+
 static void render(struct scene *scene)
 {
 	struct sdl *sdl = scene->sdl;
-	unsigned long long ns, fps;
 	int ret;
 
 	SDL_SetRelativeMouseMode(SDL_TRUE);
 	SDL_StopTextInput();
 	SDL_ShowWindow(sdl->window);
-
-	ns = nsecs();
-	fps = 0;
 
 	/* Main render loop */
 	while (1) {
@@ -2109,26 +2230,22 @@ static void render(struct scene *scene)
 			render_soft(scene);
 		}
 
+		SDL_RenderClear(sdl->renderer);
+
 		/* Map for reading */
 		ret = buf_map(scene->framebuffer, BUF_MAP_READ);
 		assert(!ret);
 
-		SDL_RenderClear(sdl->renderer);
 		SDL_UpdateTexture(sdl->screen, NULL, scene->framebuffer,
 				  scene->width * sizeof(*scene->framebuffer));
-		SDL_RenderCopy(sdl->renderer, sdl->screen, NULL, NULL);
-		SDL_RenderPresent(sdl->renderer);
 
 		/* Unmap */
 		ret = buf_unmap(scene->framebuffer);
 		assert(!ret);
 
-		fps++;
-		if (nsecs() - ns >= 1000000000ull) {
-			fprintf(stderr, "\r%lld FPS", fps);
-			ns = nsecs();
-			fps = 0;
-		}
+		SDL_RenderCopy(sdl->renderer, sdl->screen, NULL, NULL);
+		draw_scene_status(scene);
+		SDL_RenderPresent(sdl->renderer);
 	}
 }
 
