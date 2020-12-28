@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * YART (Yet Another Ray Tracing) boosted by OpenCL
+ * YART (Yet Another Ray Tracer) boosted by OpenCL
  * Copyright (C) 2020,2021 Roman Penyaev
  *
  * Based on lessons from scratchapixel.com and pbr-book.org
@@ -196,8 +196,12 @@ static void *buf_allocate(struct opencl *opencl, size_t sz)
 
 static void buf_destroy(void *ptr)
 {
-	struct buf_region *reg = (ptr - 16);
+	struct buf_region *reg;
 
+	if (!ptr)
+		return;
+
+	reg = (ptr - 16);
 	if (reg->opencl) {
 		clSVMFree(reg->opencl->context, reg);
 	} else {
@@ -1136,7 +1140,7 @@ struct object_ops triangle_mesh_ops = {
 
 };
 
-static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
+static void triangle_mesh_init(struct opencl *opencl, struct triangle_mesh *mesh,
 			       const mat4_t *o2w, uint32_t nfaces, uint32_t *face_index,
 			       uint32_t *verts_index, vec3_t *verts,
 			       vec3_t *normals, vec2_t *st)
@@ -1162,24 +1166,21 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 	max_vert_index += 1;
 
 	/* allocate memory to store the position of the mesh vertices */
-	P = buf_allocate(scene->opencl, max_vert_index * sizeof(*P));
+	P = buf_allocate(opencl, max_vert_index * sizeof(*P));
 	assert(P);
 
 	/* Transform vertices to world space */
 	for (i = 0; i < max_vert_index; ++i)
 		P[i] = m4_mul_pos(*o2w, verts[i]);
 
-	tris_index = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*tris_index));
+	tris_index = buf_allocate(opencl, num_tris * 3 * sizeof(*tris_index));
 	assert(tris_index);
 
-	N = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*N));
+	N = buf_allocate(opencl, num_tris * 3 * sizeof(*N));
 	assert(N);
 
-	sts = buf_allocate(scene->opencl, num_tris * 3 * sizeof(*sts));
+	sts = buf_allocate(opencl, num_tris * 3 * sizeof(*sts));
 	assert(sts);
-
-	/* Init object */
-	object_init(&mesh->obj, &triangle_mesh_ops, o2w);
 
 	/* Computing the transpse of the object-to-world inverse matrix */
 	transform_normals = m4_transpose(mesh->obj.w2o);
@@ -1222,8 +1223,8 @@ static void triangle_mesh_init(struct scene *scene, struct triangle_mesh *mesh,
 	buf_unmap(sts);
 }
 
-static int mesh_load(struct scene *scene, const char *file,
-		     const mat4_t *o2w)
+static int triangle_mesh_load(struct opencl *opencl, const char *file,
+			      const mat4_t *o2w, struct triangle_mesh *mesh)
 {
 	uint32_t num_faces, verts_ind_arr_sz, verts_arr_sz;
 	int ret, i;
@@ -1233,11 +1234,6 @@ static int mesh_load(struct scene *scene, const char *file,
 	uint32_t *face_index, *verts_index;
 	vec3_t *verts, *normals;
 	vec2_t *st;
-
-	struct triangle_mesh *mesh;
-
-	mesh = buf_allocate(scene->opencl, sizeof(*mesh));
-	assert(mesh);
 
 	f = fopen(file, "r");
 	if (!f) {
@@ -1301,7 +1297,7 @@ static int mesh_load(struct scene *scene, const char *file,
 	assert(pos == ftell(f));
 	fclose(f);
 
-	triangle_mesh_init(scene, mesh, o2w, num_faces, face_index,
+	triangle_mesh_init(opencl, mesh, o2w, num_faces, face_index,
 			   verts_index, verts, normals, st);
 
 	free(face_index);
@@ -1309,8 +1305,6 @@ static int mesh_load(struct scene *scene, const char *file,
 	free(verts);
 	free(normals);
 	free(st);
-
-	list_add_tail(&mesh->obj.entry, &scene->objects);
 
 	return 0;
 }
@@ -1328,7 +1322,7 @@ enum {
 	OPT_CAM_POS,
 
 	OPT_LIGHT,
-	OPT_SPHERE,
+	OPT_OBJECT,
 };
 
 static struct option long_options[] = {
@@ -1342,66 +1336,138 @@ static struct option long_options[] = {
 	{"yaw",       required_argument, 0, OPT_CAM_YAW},
 	{"pos",       required_argument, 0, OPT_CAM_POS},
 	{"light",     required_argument, 0, OPT_LIGHT},
-	{"sphere",    required_argument, 0, OPT_SPHERE},
+	{"object",    required_argument, 0, OPT_OBJECT},
 
 	{0, 0, 0, 0}
 };
 
 enum {
-	SPHERE_RADIUS,
-	SPHERE_ALBEDO,
-	SPHERE_KD,
-	SPHERE_KS,
-	SPHERE_N,
-	SPHERE_POS,
+	OBJECT_TYPE,
+	OBJECT_ALBEDO,
+	OBJECT_KD,
+	OBJECT_KS,
+	OBJECT_N,
+	OBJECT_MESH_FILE,
+	OBJECT_SPHERE_RADIUS,
+	OBJECT_SPHERE_POS,
 };
 
-static char *const sphere_token[] = {
-        [SPHERE_RADIUS] = "r",
-        [SPHERE_ALBEDO] = "albedo",
-        [SPHERE_KD]     = "Kd",
-	[SPHERE_KS]     = "Ks",
-	[SPHERE_N]      = "n",
-	[SPHERE_POS]    = "pos",
+static char *const object_token[] = {
+	[OBJECT_TYPE]          = "type",
+        [OBJECT_ALBEDO]        = "albedo",
+        [OBJECT_KD]            = "Kd",
+	[OBJECT_KS]            = "Ks",
+	[OBJECT_N]             = "n",
+	[OBJECT_MESH_FILE]     = "file",
+	[OBJECT_SPHERE_RADIUS] = "radius",
+	[OBJECT_SPHERE_POS]    = "pos",
         NULL
 };
 
-static int parse_sphere_params(char *subopts, struct sphere *sphere)
+enum {
+	UNKNOWN_OBJECT = 0,
+	SPHERE_OBJECT,
+	MESH_OBJECT,
+};
+
+static int parse_object_type_param(char *subopts)
 {
-	int errfnd = 0, num, ret;
-	bool radius_set = false;
+	int errfnd = 0, type;
 	char *value;
 
-	float *sphere_opts[] = {
-		[SPHERE_RADIUS] = &sphere->radius,
-		[SPHERE_ALBEDO] = &sphere->obj.albedo,
-		[SPHERE_KD]     = &sphere->obj.Kd,
-		[SPHERE_KS]     = &sphere->obj.Ks,
-		[SPHERE_N]      = &sphere->obj.n,
+	type = UNKNOWN_OBJECT;
+	while (*subopts != '\0' && !errfnd) {
+		int c = getsubopt(&subopts, object_token, &value);
+
+		switch (c) {
+		case OBJECT_TYPE:
+			if (!strcmp(value, "sphere"))
+				type = SPHERE_OBJECT;
+			else if (!strcmp(value, "mesh"))
+				type = MESH_OBJECT;
+			else {
+				type = -EINVAL;
+				fprintf(stderr, "Invalid object type '%s'\n",
+					value);
+			}
+			break;
+		default:
+			break;
+		}
+
+		/* Don't modify opts string in order to parse several times */
+		if (*subopts)
+			*(subopts - 1) = ',';
+
+		if (type != UNKNOWN_OBJECT)
+			break;
+	}
+
+	return type;
+}
+
+static int parse_object_params(struct scene *scene, char *subopts,
+			       int obj_type, struct object *obj)
+{
+	int errfnd = 0, num, ret;
+	bool mesh_loaded = false;
+	char *value;
+
+	float *object_opts[] = {
+		[OBJECT_ALBEDO] = &obj->albedo,
+		[OBJECT_KD]     = &obj->Kd,
+		[OBJECT_KS]     = &obj->Ks,
+		[OBJECT_N]      = &obj->n,
 	};
-	vec3_t pos;
 
 	while (*subopts != '\0' && !errfnd) {
-		int c = getsubopt(&subopts, sphere_token, &value);
+		int c = getsubopt(&subopts, object_token, &value);
 
 		/* Don't modify opts string in order to parse several times */
 		if (c != -1 && *subopts)
 			*(subopts - 1) = ',';
 
 		switch (c) {
-		case SPHERE_RADIUS:
-			radius_set = true;
-		case SPHERE_ALBEDO:
-		case SPHERE_KD:
-		case SPHERE_KS:
-		case SPHERE_N:
-			ret = sscanf(value, "%f", sphere_opts[c]);
+		case OBJECT_TYPE:
+			/* See parse_object_type_param() */
+			break;
+		case OBJECT_ALBEDO:
+		case OBJECT_KD:
+		case OBJECT_KS:
+		case OBJECT_N:
+			ret = sscanf(value, "%f", object_opts[c]);
 			if (ret != 1) {
 				fprintf(stderr, "Invald sphere option %s\n", value);
 				return -EINVAL;
 			}
 			break;
-		case SPHERE_POS:
+		case OBJECT_SPHERE_RADIUS: {
+			struct sphere *sphere;
+			float radius;
+
+			if (obj_type != SPHERE_OBJECT) {
+				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			ret = sscanf(value, "%f", &radius);
+			if (ret != 1) {
+				fprintf(stderr, "Invald sphere option %s\n", value);
+				return -EINVAL;
+			}
+			sphere = container_of(obj, typeof(*sphere), obj);
+			sphere_set_radius(sphere, radius);
+			break;
+		}
+		case OBJECT_SPHERE_POS: {
+			struct sphere *sphere;
+			vec3_t pos;
+
+			if (obj_type != SPHERE_OBJECT) {
+				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
+					object_token[c]);
+				return -EINVAL;
+			}
 			ret = sscanf(value, "%f,%f,%f%n", &pos.x, &pos.y, &pos.z,
 				     &num);
 			if (ret != 3) {
@@ -1412,18 +1478,44 @@ static int parse_sphere_params(char *subopts, struct sphere *sphere)
 			if (subopts[0] == ',')
 				/* Skip trailing comma */
 				subopts += 1;
-			if (sphere)
-				sphere_set_pos(sphere, pos);
+
+			sphere = container_of(obj, typeof(*sphere), obj);
+			sphere_set_pos(sphere, pos);
 			break;
+		}
+		case OBJECT_MESH_FILE: {
+			struct triangle_mesh *mesh;
+			mat4_t o2w = m4_identity();
+			char *file;
+
+			if (obj_type != MESH_OBJECT) {
+				fprintf(stderr, "Invalid parameter '%s' for this type of object.\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			ret = sscanf(value, "%m[^,]", &file);
+			if (ret != 1) {
+				fprintf(stderr, "Invald object 'file' parameter\n");
+				return -EINVAL;
+			}
+			mesh = container_of(obj, typeof(*mesh), obj);
+			ret = triangle_mesh_load(scene->opencl, file, &o2w, mesh);
+			free(file);
+			if (ret)
+				return ret;
+			mesh_loaded = true;
+			break;
+		}
 		default:
-			fprintf(stderr, "Unknown sphere parameter: %s\n",
+			fprintf(stderr, "Unknown object parameter: %s\n",
 				value);
 			return -EINVAL;
 		}
 	}
-
-	if (sphere && radius_set)
-		sphere_set_radius(sphere, sphere->radius);
+	if (obj_type == MESH_OBJECT && !mesh_loaded) {
+		fprintf(stderr, "Required parameter 'file' for 'mesh' object is not specified.\n");
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1436,43 +1528,75 @@ static void objects_destroy(struct scene *scene)
 		object_destroy(obj);
 }
 
-static int objects_create(struct scene *scene, int argc, char **argv)
+static struct object *object_create(struct opencl *opencl, int obj_type)
 {
 	mat4_t o2w = m4_identity();
+
+	switch (obj_type) {
+	case SPHERE_OBJECT: {
+		struct sphere *sphere;
+		float radius = 0.5f;
+
+		sphere = buf_allocate(opencl, sizeof(*sphere));
+		if (!sphere)
+			return NULL;
+		sphere_init(sphere, &o2w, radius);
+		return &sphere->obj;
+	}
+	case MESH_OBJECT: {
+		struct triangle_mesh *mesh;
+
+		mesh = buf_allocate(opencl, sizeof(*mesh));
+		if (!mesh)
+			return NULL;
+		object_init(&mesh->obj, &triangle_mesh_ops, &o2w);
+		return &mesh->obj;
+	}
+	default:
+		assert(0);
+		return NULL;
+	}
+}
+
+static int objects_create(struct scene *scene, int argc, char **argv)
+{
 	int ret = 0;
 
 	optind = 1;
 	while (1) {
 		int c, option_index = 0;
-		struct sphere *sphere;
+		int obj_type;
+
+		struct object *obj;
 
 		c = getopt_long(argc, argv, "", long_options, &option_index);
 		if (c == -1)
 			break;
 
-		/* If the next one is non-option, then expect object path */
-		if (optind < argc && *argv[optind] != '-') {
-			ret = mesh_load(scene, argv[optind], &o2w);
-			if (ret)
-				goto error;
-		}
-
-		/* Create sphere */
+		/* Create object */
 		switch (c) {
-		case OPT_SPHERE:
-			sphere = buf_allocate(scene->opencl, sizeof(*sphere));
-			if (!sphere)
-				return -ENOMEM;
-
-			sphere_init(sphere, &o2w, 0.9);
-
-			ret = parse_sphere_params(optarg, sphere);
-			if (ret) {
-				buf_destroy(sphere);
+		case OPT_OBJECT:
+			obj_type = parse_object_type_param(optarg);
+			if (obj_type < 0) {
+				ret = obj_type;
 				goto error;
 			}
-
-			list_add_tail(&sphere->obj.entry, &scene->objects);
+			if (obj_type == UNKNOWN_OBJECT) {
+				fprintf(stderr, "Object type is not specified\n");
+				ret = -EINVAL;
+				goto error;
+			}
+			obj = object_create(scene->opencl, obj_type);
+			if (!obj) {
+				ret = -ENOMEM;
+				goto error;
+			}
+			ret = parse_object_params(scene, optarg, obj_type, obj);
+			if (ret) {
+				object_destroy(obj);
+				goto error;
+			}
+			list_add_tail(&obj->entry, &scene->objects);
 			break;
 		default:
 			break;
@@ -1661,7 +1785,7 @@ static int parse_light_params(char *subopts, int light_type, struct light *light
 					light_token[c]);
 				return -EINVAL;
 			}
-			dlight = container_of(light, struct distant_light, light);
+			dlight = container_of(light, typeof(*dlight), light);
 			ret = sscanf(value, "%f,%f,%f%n", &dlight->dir.x,
 				     &dlight->dir.y, &dlight->dir.z, &num);
 			if (ret != 3) {
@@ -1683,7 +1807,7 @@ static int parse_light_params(char *subopts, int light_type, struct light *light
 					light_token[c]);
 				return -EINVAL;
 			}
-			plight = container_of(light, struct point_light, light);
+			plight = container_of(light, typeof(*plight), light);
 			ret = sscanf(value, "%f,%f,%f%n", &plight->pos.x,
 				     &plight->pos.y, &plight->pos.z, &num);
 			if (ret != 3) {
@@ -1731,6 +1855,8 @@ static struct light *light_create(struct opencl *opencl, int light_type)
 		struct distant_light *dlight;
 
 		dlight =  buf_allocate(opencl, sizeof(*dlight));
+		if (!dlight)
+			return NULL;
 		distant_light_init(dlight, &color, intensity);
 		return &dlight->light;
 	}
@@ -1738,6 +1864,8 @@ static struct light *light_create(struct opencl *opencl, int light_type)
 		struct point_light *plight;
 
 		plight =  buf_allocate(opencl, sizeof(*plight));
+		if (!plight)
+			return NULL;
 		point_light_init(plight, &color, intensity);
 		return &plight->light;
 	}
@@ -2253,7 +2381,7 @@ static void usage(void)
 {
 	printf("Usage:\n"
 	       "  $ yart [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
-	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>] [--sphere <sphere params> ] <mesh.obj>..."
+	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>] [--light <light params>]... [--object <object params> ]..."
 	       "\n"
 	       "OPTIONS:\n"
 	       "   --no-opencl  - no OpenCL hardware accelaration\n"
@@ -2268,24 +2396,29 @@ static void usage(void)
 	       "   --pos       - initial camera position in format x,y,z.\n"
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
 	       "\n"
-	       "   --light     - light object, comma separated parameters:\n"
+	       "   --light     - add light, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
 	       "                               can be specified\n"
 	       "                 'color'     - RGB color in hex, e.g. for red ff0000\n"
 	       "                 'intensity' - light intensity, should be float\n"
-	       "              Distant light:\n"
+	       "                Distant light:\n"
 	       "                 'dir'       - direction vector of light in infinity\n"
-	       "              Point light:\n"
+	       "                Point light:\n"
 	       "                 'pos'        - position of the point light\n"
 	       "\n"
-	       "   --sphere    - sphere object, comma separated parameters:\n"
-	       "                 'r'      - sphere radius\n"
+	       "   --object    - add object, comma separated parameters should follow:\n"
+	       "                 'type'      - required parameter, specifies type of the object, 'mesh' or 'sphere'\n"
+	       "                               can be specified\n"
 	       "                 'albedo' - albedo\n"
-	       "                 'Kd'     - didduse  weight\n"
+	       "                 'Kd'     - diffuse weight\n"
 	       "                 'Ks'     - specular weight\n"
 	       "                 'n'      - specular exponent\n"
+	       "                Sphere:\n"
+	       "                 'radius' - sphere radius\n"
 	       "                 'pos'    - spehere position\n"
-	       "                 e.g.: '--sphere r=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
+	       "                Mesh:\n"
+	       "                 'file'   - required paremeter, file path of the mesh object\n"
+	       "                 e.g.: '--object type=sphere,radius=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
 	       "\n"
 		);
 
@@ -2362,7 +2495,7 @@ int main(int argc, char **argv)
 		case OPT_LIGHT:
 			/* See lights_create() */
 			break;
-		case OPT_SPHERE:
+		case OPT_OBJECT:
 			/* See objects_create() */
 			break;
 		case '?':

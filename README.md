@@ -1,5 +1,5 @@
 # YART
-YART is a just Yet Another Ray Tracing renderer boosted by OpenCL
+YART is a just Yet Another Ray Tracer renderer boosted by OpenCL
 based on lessons from http://scratchapixel.com and http://pbr-book.org
 
 The main goal is nothing but to learn ray tracing algorithms and
@@ -25,16 +25,16 @@ the mouse and walk with WASD keys.
 # Creates 4 different spheres on 1 plane under distant light with
 # specified direction. Camera is set to the position with pitch and
 # yaw angles
-$ ./yart --sphere r=0.3,pos=-3,1,0,Ks=0.05  \
-         --sphere r=0.5,pos=-2,1,0,Ks=0.08  \
-         --sphere r=0.7,pos=-0.5,1,0,Ks=0.1 \
-         --sphere r=0.9,pos=1.4,1,0,Ks=0.4  \
+$ ./yart --object type=sphere,radius=0.3,pos=-3,1,0,Ks=0.05  \
+         --object type=sphere,radius=0.5,pos=-2,1,0,Ks=0.08  \
+         --object type=sphere,radius=0.7,pos=-0.5,1,0,Ks=0.1 \
+         --object type=sphere,radius=0.9,pos=1.4,1,0,Ks=0.4  \
+         \
+         --object type=mesh,file=./models/plane.geo \
          \
          --light dir=-0.4,-0.8,0.3,type=distant \
          \
-         --pitch -10 --yaw -55 --pos 10,3,7 \
-         \
-         ./models/plane.geo
+         --pitch -10 --yaw -55 --pos 10,3,7
 ```
 
 ## Example 2
@@ -43,13 +43,13 @@ $ ./yart --sphere r=0.3,pos=-3,1,0,Ks=0.05  \
 
 ```
 # Creates 1 sphere under 3 different point lights
-$ ./yart --sphere r=0.8,pos=0,1,0,Ks=0.05 \
+$ ./yart --object type=sphere,radius=0.8,pos=0,1,0,Ks=0.05 \
+         \
+         --object type=mesh,file=./models/plane.geo \
          \
          --light pos=-2,2,1,type=point,intensity=200,color=ff0000 \
          --light pos=0,4,1,type=point,intensity=190,color=00ff00  \
          --light pos=2,5,1,type=point,intensity=420,color=0000ff  \
          \
-         --pos=0,1,8 \
-         \
-         ./models/plane.geo
+         --pos=0,1,8
 ```
