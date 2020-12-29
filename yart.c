@@ -505,7 +505,7 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 
 		n0 = v3_muls(n0, 1 - uv->x - uv->y);
 		n1 = v3_muls(n1, uv->x);
-		n1 = v3_muls(n2, uv->y);
+		n2 = v3_muls(n2, uv->y);
 
 		*hit_normal = v3_add(n2, v3_add(n0, n1));
 	} else {
