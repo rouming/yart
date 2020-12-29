@@ -330,7 +330,6 @@ struct object {
 	struct object_ops ops;	 /* because of opencl can't be a pointer */
 	struct list_head entry;
 	mat4_t o2w;
-	mat4_t w2o;
 	enum material_type material;
 	float albedo;
 	float Kd;  /* diffuse weight */
@@ -1200,7 +1199,6 @@ static void object_init(struct object *obj, struct object_ops *ops,
 	INIT_LIST_HEAD(&obj->entry);
 	obj->ops = *ops;
 	obj->o2w = params->o2w;
-	obj->w2o = m4_invert_affine(obj->o2w);
 	obj->material = MATERIAL_PHONG;
 	obj->albedo = params->albedo;
 	obj->Kd = params->Kd;
@@ -1275,8 +1273,30 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	/* Init object */
 	object_init(&mesh->obj, &triangle_mesh_ops, params);
 
-	/* Computing the transpse of the object-to-world inverse matrix */
-	transform_normals = m4_transpose(mesh->obj.w2o);
+	/*
+	 * Computing the transpose of the object-to-world inverse matrix.
+	 * We can't transform normal by multiplying it on o2w matrix as we
+	 * did for each vertex, because normal will cease to be perpendicular,
+	 * so 'N dot V == 0' will not be true any more. What we need instead
+	 * is to keep same rotation, but invert scaling, i.e. if we have
+	 * a transformation matrix: M = R * S, which implies scaling and
+	 * rotation, we need keep rotation but invert scaling, thus:
+	 *   M' = R * S(-1)
+	 * The inverse of a rotation matrix is its transpose, the transpose of
+	 * a scale matrix is the same scale matrix (so noop), thus to get the
+	 * transformation matrix for normal we can:
+	 *
+	 *  M' = M(-1)(T) = (R * S)(-1)(T) = R(-1)(T) * S(-1)(T) = R * S(-1)
+	 *
+	 * Corresponding math:
+	 *   v . n = 0
+	 *   v . M*M(-1) . n = 0        [because I = M*M(-1)]
+	 *   (v*M) . (n*M(-1)(T)) = 0   [because A*x . y = x . A(T)*y]
+	 *
+	 * where v - vertex, n - normal, M - transformation matrix
+	 */
+	transform_normals = m4_transpose(m4_invert_affine(mesh->obj.o2w));
+
 
 	/* Generate the triangle index array and set normals and st coordinates */
 	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
