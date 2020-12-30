@@ -1224,34 +1224,14 @@ static void sphere_init(struct sphere *sphere, struct object_params *params)
 	sphere_set_pos(sphere, params->sphere.pos);
 }
 
-
 static void triangle_mesh_init(struct opencl *opencl, struct object_params *params,
-			       struct triangle_mesh *mesh, uint32_t nfaces,
-			       uint32_t *face_index, uint32_t *verts_index,
-			       vec3_t *verts, vec3_t *normals, vec2_t *st)
+			       struct triangle_mesh *mesh, uint32_t num_verts,
+			       vec3_t *verts, vec3_t *normals, vec2_t *sts)
 {
-	uint32_t i, j, l, k = 0, max_vert_index = 0;
-	uint32_t num_tris = 0, num_verts;
-
 	vec3_t *P, *N;
-	vec2_t *sts;
-
+	vec2_t *S;
 	mat4_t transform_normals;
-
-	mesh->smooth_shading = true;
-
-	/* find out how many triangles we need to create for this mesh */
-	for (i = 0; i < nfaces; ++i) {
-		num_tris += face_index[i] - 2;
-		for (j = 0; j < face_index[i]; ++j) {
-			if (verts_index[k + j] > max_vert_index)
-				max_vert_index = verts_index[k + j];
-		}
-		k += face_index[i];
-	}
-	max_vert_index += 1;
-
-	num_verts = num_tris * 3;
+	int i;
 
 	P = buf_allocate(opencl, num_verts * sizeof(*P));
 	assert(P);
@@ -1259,11 +1239,8 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	N = buf_allocate(opencl, num_verts * sizeof(*N));
 	assert(N);
 
-	sts = buf_allocate(opencl, num_verts * sizeof(*sts));
-	assert(sts);
-
-	/* Init object */
-	object_init(&mesh->obj, &triangle_mesh_ops, params);
+	S = buf_allocate(opencl, num_verts * sizeof(*S));
+	assert(S);
 
 	/*
 	 * Computing the transpose of the object-to-world inverse matrix.
@@ -1287,46 +1264,107 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	 *
 	 * where v - vertex, n - normal, M - transformation matrix
 	 */
-	transform_normals = m4_transpose(m4_invert_affine(mesh->obj.o2w));
+	transform_normals = m4_transpose(m4_invert_affine(params->o2w));
+
+	/* Expect triangulated mesh */
+	assert(!(num_verts % 3));
+
+	/* For each triangle */
+	for (i = 0; i < num_verts; i += 3) {
+		/* Transform vertices */
+		P[i + 0] = m4_mul_pos(params->o2w, verts[i + 0]);
+		P[i + 1] = m4_mul_pos(params->o2w, verts[i + 1]);
+		P[i + 2] = m4_mul_pos(params->o2w, verts[i + 2]);
+
+		/* Transform normals */
+		N[i + 0] = m4_mul_dir(transform_normals, normals[i + 0]);
+		N[i + 1] = m4_mul_dir(transform_normals, normals[i + 1]);
+		N[i + 2] = m4_mul_dir(transform_normals, normals[i + 2]);
+
+		N[i + 0] = v3_norm(N[i + 0]);
+		N[i + 1] = v3_norm(N[i + 1]);
+		N[i + 2] = v3_norm(N[i + 2]);
+
+		S[i + 0] = sts[i + 0];
+		S[i + 1] = sts[i + 1];
+		S[i + 2] = sts[i + 2];
+	}
+
+	/* Init object */
+	object_init(&mesh->obj, &triangle_mesh_ops, params);
+	mesh->num_verts = num_verts;
+	mesh->vertices = P;
+	mesh->normals = N;
+	mesh->sts = S;
+
+	/* Enable smooth shading */
+	mesh->smooth_shading = true;
+
+	/* Not supposed to changed by the host, so unmap immediately */
+	buf_unmap(P);
+	buf_unmap(N);
+	buf_unmap(S);
+}
+
+static void
+triangle_mesh_init_geo(struct opencl *opencl, struct object_params *params,
+		       struct triangle_mesh *mesh, uint32_t nfaces,
+		       uint32_t *face_index, uint32_t *verts_index,
+		       vec3_t *verts, vec3_t *normals, vec2_t *sts)
+{
+	uint32_t i, j, l, k = 0, max_vert_index = 0;
+	uint32_t num_tris = 0, num_verts;
+	vec3_t *flat_verts, *flat_norms;
+	vec2_t *flat_sts;
+
+	/* find out how many triangles we need to create for this mesh */
+	for (i = 0; i < nfaces; ++i) {
+		num_tris += face_index[i] - 2;
+		for (j = 0; j < face_index[i]; ++j) {
+			if (verts_index[k + j] > max_vert_index)
+				max_vert_index = verts_index[k + j];
+		}
+		k += face_index[i];
+	}
+	max_vert_index += 1;
+	num_verts = num_tris * 3;
+	assert(max_vert_index <= num_verts);
+
+	flat_verts = calloc(num_verts, sizeof(*flat_verts));
+	assert(flat_verts);
+	flat_norms = calloc(num_verts, sizeof(*flat_norms));
+	assert(flat_norms);
+	flat_sts = calloc(num_verts, sizeof(*flat_sts));
+	assert(flat_sts);
 
 	/* For each face */
 	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
 		/* For each triangle in a face */
-		for (j = 0; j < face_index[i] - 2; j++) {
-			/* Transform vertices */
-			P[l + 0] = m4_mul_pos(params->o2w,
-					      verts[verts_index[k]]);
-			P[l + 1] = m4_mul_pos(params->o2w,
-					      verts[verts_index[k + j + 1]]);
-			P[l + 2] = m4_mul_pos(params->o2w,
-					      verts[verts_index[k + j + 2]]);
+		for (j = 0; j < face_index[i] - 2; j++, l += 3) {
+			assert(l + 2 < num_verts);
 
-			/* Transform normals */
-			N[l + 0] = m4_mul_dir(transform_normals, normals[k]);
-			N[l + 1] = m4_mul_dir(transform_normals, normals[k + j + 1]);
-			N[l + 2] = m4_mul_dir(transform_normals, normals[k + j + 2]);
+			/* Flatten vertices */
+			flat_verts[l + 0] = verts[verts_index[k]];
+			flat_verts[l + 1] = verts[verts_index[k + j + 1]];
+			flat_verts[l + 2] = verts[verts_index[k + j + 2]];
 
-			N[l + 0] = v3_norm(N[l + 0]);
-			N[l + 1] = v3_norm(N[l + 1]);
-			N[l + 2] = v3_norm(N[l + 2]);
+			/* Flatten normals */
+			flat_norms[l + 0] = normals[k];
+			flat_norms[l + 1] = normals[k + j + 1];
+			flat_norms[l + 2] = normals[k + j + 2];
 
-			sts[l + 0] = st[k];
-			sts[l + 1] = st[k + j + 1];
-			sts[l + 2] = st[k + j + 2];
-			l += 3;
+			/* Flatten texture coords */
+			flat_sts[l + 0] = sts[k];
+			flat_sts[l + 1] = sts[k + j + 1];
+			flat_sts[l + 2] = sts[k + j + 2];
 		}
 		k += face_index[i];
 	}
-
-	mesh->num_verts = num_verts;
-	mesh->vertices = P;
-	mesh->normals = N;
-	mesh->sts = sts;
-
-	/* Not supposed to changed by the host, so unmap */
-	buf_unmap(P);
-	buf_unmap(N);
-	buf_unmap(sts);
+	triangle_mesh_init(opencl, params, mesh, num_verts, flat_verts,
+			   flat_norms, flat_sts);
+	free(flat_verts);
+	free(flat_norms);
+	free(flat_sts);
 }
 
 static int triangle_mesh_load_geo(struct scene *scene,
@@ -1339,7 +1377,7 @@ static int triangle_mesh_load_geo(struct scene *scene,
 
 	uint32_t *face_index, *verts_index;
 	vec3_t *verts, *normals;
-	vec2_t *st;
+	vec2_t *sts;
 
 	struct triangle_mesh *mesh;
 
@@ -1390,11 +1428,11 @@ static int triangle_mesh_load_geo(struct scene *scene,
 		assert(ret == 3);
 	}
 
-	st = calloc(verts_ind_arr_sz, sizeof(*st));
-	assert(st);
+	sts = calloc(verts_ind_arr_sz, sizeof(*sts));
+	assert(sts);
 
 	for (i = 0; i < verts_ind_arr_sz; i++) {
-		vec2_t *coord = &st[i];
+		vec2_t *coord = &sts[i];
 		ret = fscanf(f, "%f %f ", &coord->x, &coord->y);
 		assert(ret == 2);
 	}
@@ -1407,12 +1445,11 @@ static int triangle_mesh_load_geo(struct scene *scene,
 
 	mesh = buf_allocate(scene->opencl, sizeof(*mesh));
 	if (!mesh) {
-		ret = -EINVAL;
+		ret = -ENOMEM;
 		goto error;
 	}
-
-	triangle_mesh_init(scene->opencl, params, mesh, num_faces, face_index,
-			   verts_index, verts, normals, st);
+	triangle_mesh_init_geo(scene->opencl, params, mesh, num_faces,
+			       face_index, verts_index, verts, normals, sts);
 	list_add_tail(&mesh->obj.entry, &scene->objects);
 	ret = 0;
 
@@ -1421,7 +1458,7 @@ error:
 	free(verts_index);
 	free(verts);
 	free(normals);
-	free(st);
+	free(sts);
 
 	return ret;
 }
