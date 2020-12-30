@@ -1141,6 +1141,11 @@ static struct option long_options[] = {
 
 enum {
 	OBJECT_TYPE,
+	OBJECT_ROTATE_X,
+	OBJECT_ROTATE_Y,
+	OBJECT_ROTATE_Z,
+	OBJECT_SCALE,
+	OBJECT_TRANSLATE,
 	OBJECT_ALBEDO,
 	OBJECT_KD,
 	OBJECT_KS,
@@ -1153,6 +1158,11 @@ enum {
 
 static char *const object_token[] = {
 	[OBJECT_TYPE]          = "type",
+	[OBJECT_ROTATE_X]      = "rotate-x",
+	[OBJECT_ROTATE_Y]      = "rotate-y",
+	[OBJECT_ROTATE_Z]      = "rotate-z",
+	[OBJECT_SCALE]         = "scale",
+	[OBJECT_TRANSLATE]     = "translate",
         [OBJECT_ALBEDO]        = "albedo",
         [OBJECT_KD]            = "Kd",
 	[OBJECT_KS]            = "Ks",
@@ -1626,6 +1636,50 @@ static int parse_object_params(char *subopts, struct object_params *params)
 				return -EINVAL;
 			}
 			break;
+		case OBJECT_ROTATE_X:
+		case OBJECT_ROTATE_Y:
+		case OBJECT_ROTATE_Z: {
+			float deg_angle;
+			mat4_t m;
+
+			ret = sscanf(value, "%f", &deg_angle);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid object '%s' parameter\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			if (c == OBJECT_ROTATE_X)
+				m = m4_rotation_x(deg2rad(deg_angle));
+			else if (c == OBJECT_ROTATE_Y)
+				m = m4_rotation_y(deg2rad(deg_angle));
+			else
+				m = m4_rotation_z(deg2rad(deg_angle));
+			params->o2w = m4_mul(params->o2w, m);
+			break;
+		}
+		case OBJECT_SCALE:
+		case OBJECT_TRANSLATE: {
+			vec3_t vec;
+			mat4_t m;
+
+			ret = sscanf(value, "%f,%f,%f%n", &vec.x, &vec.y, &vec.z,
+				     &num);
+			if (ret != 3) {
+				fprintf(stderr, "Invalid object '%s' parameter\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			subopts = value + num;
+			if (subopts[0] == ',')
+				/* Skip trailing comma */
+				subopts += 1;
+			if (c == OBJECT_SCALE)
+				m = m4_scaling(vec);
+			else
+				m = m4_translation(vec);
+			params->o2w = m4_mul(params->o2w, m);
+			break;
+		}
 		case OBJECT_ALBEDO:
 			fptr = &params->albedo;
 			break;
@@ -2629,6 +2683,11 @@ static void usage(void)
 	       "   --object    - add object, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the object, 'mesh' or 'sphere'\n"
 	       "                               can be specified\n"
+	       "                 'rotate-x'\n"
+	       "                 'rotate-y'\n"
+	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
+	       "                 'scale'     - scale on specified vector, accepts float,float,float\n"
+	       "                 'translate' - translates on specified offset vector, accepts float,float,float\n"
 	       "                 'albedo' - albedo\n"
 	       "                 'Kd'     - diffuse weight\n"
 	       "                 'Ks'     - specular weight\n"
