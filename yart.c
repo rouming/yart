@@ -31,6 +31,13 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 
+#include <assimp/cimport.h>
+#include <assimp/scene.h>
+#include <assimp/mesh.h>
+#include <assimp/material.h>
+#include <assimp/postprocess.h>
+#include <assimp/vector3.h>
+
 #define __global
 
 #else /* __OPENCL__ */
@@ -1466,7 +1473,115 @@ error:
 static int triangle_mesh_load_obj(struct scene *scene,
 				  struct object_params *params)
 {
-	return -EINVAL;
+	const struct aiScene *ai_scene;
+	struct object *obj, *tmp;
+	LIST_HEAD(objects);
+
+	vec3_t *flat_verts, *flat_norms;
+	vec2_t *flat_sts;
+
+	uint32_t num_verts, i_mesh;
+	int ret, i;
+
+	ai_scene = aiImportFile(params->mesh.file,
+				aiProcess_CalcTangentSpace       |
+				aiProcess_Triangulate            |
+				aiProcess_JoinIdenticalVertices  |
+				aiProcess_SortByPType);
+	if (!ai_scene) {
+		printf("Can't open %s, aiImportFile failed\n", params->mesh.file);
+		return -EINVAL;
+	}
+
+	/* Count all vertices */
+	for (num_verts = 0, i_mesh = 0; i_mesh < ai_scene->mNumMeshes; i_mesh++) {
+		const struct aiMesh *ai_mesh;
+		uint32_t i_face;
+
+		ai_mesh = ai_scene->mMeshes[i_mesh];
+		for (i_face = 0; i_face < ai_mesh->mNumFaces; i_face++) {
+			const struct aiFace *ai_face = &ai_mesh->mFaces[i_face];
+
+			assert(!(ai_face->mNumIndices % 3));
+			num_verts += ai_face->mNumIndices;
+		}
+	}
+
+	flat_verts = calloc(num_verts, sizeof(*flat_verts));
+	assert(flat_verts);
+	flat_norms = calloc(num_verts, sizeof(*flat_norms));
+	assert(flat_norms);
+	flat_sts = calloc(num_verts, sizeof(*flat_sts));
+	assert(flat_sts);
+
+	/* Flatten vertices, normals and texture coords */
+	for (i = 0, i_mesh = 0; i_mesh < ai_scene->mNumMeshes; i_mesh++) {
+		const struct aiMesh *ai_mesh;
+		struct triangle_mesh *mesh;
+		uint32_t i_face;
+
+		ai_mesh = ai_scene->mMeshes[i_mesh];
+		for (i_face = 0; i_face < ai_mesh->mNumFaces; i_face++) {
+			const struct aiFace *ai_face = &ai_mesh->mFaces[i_face];
+			uint32_t i_ind;
+
+			for (i_ind = 0; i_ind < ai_face->mNumIndices / 3; i_ind++, i += 3) {
+				struct aiVector3D *v0, *v1, *v2;
+
+				/* Flatten vertices */
+				v0 = &ai_mesh->mVertices[ai_face->mIndices[i_ind * 3 + 0]];
+				v1 = &ai_mesh->mVertices[ai_face->mIndices[i_ind * 3 + 1]];
+				v2 = &ai_mesh->mVertices[ai_face->mIndices[i_ind * 3 + 2]];
+
+				flat_verts[i + 0] = vec3(v0->x, v0->y, v0->z);
+				flat_verts[i + 1] = vec3(v1->x, v1->y, v1->z);
+				flat_verts[i + 2] = vec3(v2->x, v2->y, v2->z);
+
+				/* Flatten normals */
+				v0 = &ai_mesh->mNormals[ai_face->mIndices[i_ind * 3 + 0]];
+				v1 = &ai_mesh->mNormals[ai_face->mIndices[i_ind * 3 + 1]];
+				v2 = &ai_mesh->mNormals[ai_face->mIndices[i_ind * 3 + 2]];
+
+				flat_norms[i + 0] = vec3(v0->x, v0->y, v0->z);
+				flat_norms[i + 1] = vec3(v1->x, v1->y, v1->z);
+				flat_norms[i + 2] = vec3(v2->x, v2->y, v2->z);
+
+				/* Flatten texture coords */
+				v0 = &ai_mesh->mTextureCoords[0][ai_face->mIndices[i_ind * 3 + 0]];
+				v1 = &ai_mesh->mTextureCoords[0][ai_face->mIndices[i_ind * 3 + 1]];
+				v2 = &ai_mesh->mTextureCoords[0][ai_face->mIndices[i_ind * 3 + 2]];
+
+				flat_sts[i + 0] = vec2(v0->x, v0->y);
+				flat_sts[i + 1] = vec2(v1->x, v1->y);
+				flat_sts[i + 2] = vec2(v2->x, v2->y);
+			}
+		}
+
+		mesh = buf_allocate(scene->opencl, sizeof(*mesh));
+		if (!mesh) {
+			ret = -ENOMEM;
+			goto error;
+		}
+		triangle_mesh_init(scene->opencl, params, mesh, num_verts,
+				   flat_verts, flat_norms, flat_sts);
+		list_add_tail(&mesh->obj.entry, &objects);
+
+	}
+	list_splice_tail(&objects, &scene->objects);
+	ret = 0;
+out:
+	aiReleaseImport(ai_scene);
+	free(flat_verts);
+	free(flat_norms);
+	free(flat_sts);
+
+	return ret;
+
+error:
+	list_for_each_entry_safe(obj, tmp, &objects, entry)
+		object_destroy(obj);
+
+	goto out;
 }
 
 static bool is_parsed_object_param(struct object_params *params, int t)
