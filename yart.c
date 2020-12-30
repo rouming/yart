@@ -408,11 +408,10 @@ static void sphere_get_surface_props(__global struct object *obj,
 struct triangle_mesh {
 	struct object	  obj;
 	bool		  smooth_shading; /* smooth shading */
-	uint32_t	  num_tris;	  /* number of triangles */
-	__global vec3_t	  *P;		  /* triangles vertex position */
-	__global uint32_t *tris_index;	  /* vertex index array */
-	__global vec3_t	  *N;		  /* triangles vertex normals */
-	__global vec2_t	  *sts;		  /* triangles texture coordinates */
+	uint32_t	  num_verts;	  /* number of vertices */
+	__global vec3_t	  *vertices;	  /* vertex positions */
+	__global vec3_t	  *normals;	  /* vertex normals */
+	__global vec2_t	  *sts;		  /* texture coordinates */
 };
 
 static bool
@@ -457,17 +456,17 @@ static bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *o
 {
 	__global struct triangle_mesh *mesh;
 
-	uint32_t j, i;
+	uint32_t i;
 	bool isect;
 
 	mesh = container_of(obj, typeof(*mesh), obj);
 
 	isect = false;
-	for (i = 0, j = 0; i < mesh->num_tris; i++) {
-		__global const vec3_t *P = mesh->P;
-		__global const vec3_t *v0 = &P[mesh->tris_index[j + 0]];
-		__global const vec3_t *v1 = &P[mesh->tris_index[j + 1]];
-		__global const vec3_t *v2 = &P[mesh->tris_index[j + 2]];
+	for (i = 0; i < mesh->num_verts; i += 3) {
+		__global const vec3_t *vertices = mesh->vertices;
+		__global const vec3_t *v0 = &vertices[i + 0];
+		__global const vec3_t *v1 = &vertices[i + 1];
+		__global const vec3_t *v2 = &vertices[i + 2];
 		float t = INFINITY, u, v;
 
 		if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
@@ -475,10 +474,9 @@ static bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *o
 			*near = t;
 			uv->x = u;
 			uv->y = v;
-			*index = i;
+			*index = i / 3;
 			isect = true;
 		}
-		j += 3;
 	}
 
 	return isect;
@@ -497,10 +495,10 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 	mesh = container_of(obj, typeof(*mesh), obj);
 	if (mesh->smooth_shading) {
 		/* vertex normal */
-		__global const vec3_t *N = mesh->N;
-		vec3_t n0 = N[index * 3 + 0];
-		vec3_t n1 = N[index * 3 + 1];
-		vec3_t n2 = N[index * 3 + 2];
+		__global const vec3_t *normals = mesh->normals;
+		vec3_t n0 = normals[index * 3 + 0];
+		vec3_t n1 = normals[index * 3 + 1];
+		vec3_t n2 = normals[index * 3 + 2];
 
 		n0 = v3_muls(n0, 1 - uv->x - uv->y);
 		n1 = v3_muls(n1, uv->x);
@@ -509,10 +507,10 @@ static void triangle_mesh_get_surface_props(__global struct object *obj,
 		*hit_normal = v3_add(n2, v3_add(n0, n1));
 	} else {
 		/* face normal */
-		__global const vec3_t *P = mesh->P;
-		vec3_t v0 = P[mesh->tris_index[index * 3 + 0]];
-		vec3_t v1 = P[mesh->tris_index[index * 3 + 1]];
-		vec3_t v2 = P[mesh->tris_index[index * 3 + 2]];
+		__global const vec3_t *vertices = mesh->vertices;
+		vec3_t v0 = vertices[index * 3 + 0];
+		vec3_t v1 = vertices[index * 3 + 1];
+		vec3_t v2 = vertices[index * 3 + 2];
 
 		vec3_t v1v0 = v3_sub(v1, v0);
 		vec3_t v2v0 = v3_sub(v2, v0);
@@ -1078,9 +1076,8 @@ static void triangle_mesh_destroy(struct object *obj)
 	struct triangle_mesh *mesh =
 		container_of(obj, struct triangle_mesh, obj);
 
-	buf_destroy(mesh->P);
-	buf_destroy(mesh->tris_index);
-	buf_destroy(mesh->N);
+	buf_destroy(mesh->vertices);
+	buf_destroy(mesh->normals);
 	buf_destroy(mesh->sts);
 	buf_destroy(mesh);
 }
@@ -1234,9 +1231,8 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 			       vec3_t *verts, vec3_t *normals, vec2_t *st)
 {
 	uint32_t i, j, l, k = 0, max_vert_index = 0;
-	uint32_t num_tris = 0;
+	uint32_t num_tris = 0, num_verts;
 
-	uint32_t *tris_index;
 	vec3_t *P, *N;
 	vec2_t *sts;
 
@@ -1253,21 +1249,15 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	}
 	max_vert_index += 1;
 
-	/* allocate memory to store the position of the mesh vertices */
-	P = buf_allocate(opencl, max_vert_index * sizeof(*P));
+	num_verts = num_tris * 3;
+
+	P = buf_allocate(opencl, num_verts * sizeof(*P));
 	assert(P);
 
-	/* Transform vertices to world space */
-	for (i = 0; i < max_vert_index; ++i)
-		P[i] = m4_mul_pos(params->o2w, verts[i]);
-
-	tris_index = buf_allocate(opencl, num_tris * 3 * sizeof(*tris_index));
-	assert(tris_index);
-
-	N = buf_allocate(opencl, num_tris * 3 * sizeof(*N));
+	N = buf_allocate(opencl, num_verts * sizeof(*N));
 	assert(N);
 
-	sts = buf_allocate(opencl, num_tris * 3 * sizeof(*sts));
+	sts = buf_allocate(opencl, num_verts * sizeof(*sts));
 	assert(sts);
 
 	/* Init object */
@@ -1297,16 +1287,19 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	 */
 	transform_normals = m4_transpose(m4_invert_affine(mesh->obj.o2w));
 
-
-	/* Generate the triangle index array and set normals and st coordinates */
+	/* For each face */
 	for (i = 0, k = 0, l = 0; i < nfaces; i++) {
-		/* Each triangle in a face */
+		/* For each triangle in a face */
 		for (j = 0; j < face_index[i] - 2; j++) {
-			tris_index[l + 0] = verts_index[k];
-			tris_index[l + 1] = verts_index[k + j + 1];
-			tris_index[l + 2] = verts_index[k + j + 2];
+			/* Transform vertices */
+			P[l + 0] = m4_mul_pos(params->o2w,
+					      verts[verts_index[k]]);
+			P[l + 1] = m4_mul_pos(params->o2w,
+					      verts[verts_index[k + j + 1]]);
+			P[l + 2] = m4_mul_pos(params->o2w,
+					      verts[verts_index[k + j + 2]]);
 
-			/* Transforming normals */
+			/* Transform normals */
 			N[l + 0] = m4_mul_dir(transform_normals, normals[k]);
 			N[l + 1] = m4_mul_dir(transform_normals, normals[k + j + 1]);
 			N[l + 2] = m4_mul_dir(transform_normals, normals[k + j + 2]);
@@ -1323,15 +1316,13 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 		k += face_index[i];
 	}
 
-	mesh->num_tris = num_tris;
-	mesh->P = P;
-	mesh->tris_index = tris_index;
-	mesh->N = N;
+	mesh->num_verts = num_verts;
+	mesh->vertices = P;
+	mesh->normals = N;
 	mesh->sts = sts;
 
 	/* Not supposed to changed by the host, so unmap */
 	buf_unmap(P);
-	buf_unmap(tris_index);
 	buf_unmap(N);
 	buf_unmap(sts);
 }
