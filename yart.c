@@ -1238,6 +1238,8 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 
 	mat4_t transform_normals;
 
+	mesh->smooth_shading = true;
+
 	/* find out how many triangles we need to create for this mesh */
 	for (i = 0; i < nfaces; ++i) {
 		num_tris += face_index[i] - 2;
