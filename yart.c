@@ -1146,6 +1146,7 @@ enum {
 	OBJECT_KS,
 	OBJECT_N,
 	OBJECT_MESH_FILE,
+	OBJECT_MESH_SMOOTH_SHADING,
 	OBJECT_SPHERE_RADIUS,
 	OBJECT_SPHERE_POS,
 };
@@ -1157,6 +1158,7 @@ static char *const object_token[] = {
 	[OBJECT_KS]            = "Ks",
 	[OBJECT_N]             = "n",
 	[OBJECT_MESH_FILE]     = "file",
+	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
 	[OBJECT_SPHERE_RADIUS] = "radius",
 	[OBJECT_SPHERE_POS]    = "pos",
         NULL
@@ -1178,6 +1180,7 @@ struct object_params {
 	float  n;
 	struct {
 		char  file[512];
+		bool  smooth_shading;
 	} mesh;
 	struct {
 		float  radius;
@@ -1299,13 +1302,11 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 
 	/* Init object */
 	object_init(&mesh->obj, &triangle_mesh_ops, params);
+	mesh->smooth_shading = params->mesh.smooth_shading;
 	mesh->num_verts = num_verts;
 	mesh->vertices = P;
 	mesh->normals = N;
 	mesh->sts = S;
-
-	/* Enable smooth shading */
-	mesh->smooth_shading = true;
 
 	/* Not supposed to changed by the host, so unmap immediately */
 	buf_unmap(P);
@@ -1487,7 +1488,10 @@ static int triangle_mesh_load_obj(struct scene *scene,
 				aiProcess_CalcTangentSpace       |
 				aiProcess_Triangulate            |
 				aiProcess_JoinIdenticalVertices  |
-				aiProcess_SortByPType);
+				aiProcess_SortByPType            |
+				params->mesh.smooth_shading ?
+				aiProcess_GenSmoothNormals :
+				aiProcess_GenNormals);
 	if (!ai_scene) {
 		printf("Can't open %s, aiImportFile failed\n", params->mesh.file);
 		return -EINVAL;
@@ -1670,6 +1674,28 @@ static int parse_object_params(char *subopts, struct object_params *params)
 					object_token[c]);
 				return -EINVAL;
 			}
+			break;
+		}
+		case OBJECT_MESH_SMOOTH_SHADING: {
+			char *flag;
+
+			ret = sscanf(value, "%m[^,]", &flag);
+			if (ret != 1) {
+				fprintf(stderr, "Invald object '%s' parameter\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			if (!strcmp(flag, "0") || !strcmp(flag, "false"))
+				params->mesh.smooth_shading = false;
+			else if (!strcmp(flag, "1") || !strcmp(flag, "true"))
+				params->mesh.smooth_shading = true;
+			else {
+				fprintf(stderr, "Invalid value of  '%s' parameter, should be '1','0','true or 'false'\n",
+					object_token[c]);
+				free(flag);
+				return -EINVAL;
+			}
+			free(flag);
 			break;
 		}
 		default:
@@ -2613,6 +2639,7 @@ static void usage(void)
 	       "                Mesh:\n"
 	       "                 'file'   - required paremeter, file path of the mesh object\n"
 	       "                 e.g.: '--object type=sphere,radius=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
+	       "                 'smooth-shading' - enables smooth shading, should '0','1','false' or true'\n"
 	       "\n"
 		);
 
