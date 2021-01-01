@@ -1499,9 +1499,9 @@ static int triangle_mesh_load_obj(struct scene *scene,
 				aiProcess_Triangulate            |
 				aiProcess_JoinIdenticalVertices  |
 				aiProcess_SortByPType            |
-				params->mesh.smooth_shading ?
-				aiProcess_GenSmoothNormals :
-				aiProcess_GenNormals);
+				(params->mesh.smooth_shading ?
+				 aiProcess_GenSmoothNormals :
+				 aiProcess_GenNormals));
 	if (!ai_scene) {
 		printf("Can't open %s, aiImportFile failed\n", params->mesh.file);
 		return -EINVAL;
@@ -1516,7 +1516,7 @@ static int triangle_mesh_load_obj(struct scene *scene,
 		for (i_face = 0; i_face < ai_mesh->mNumFaces; i_face++) {
 			const struct aiFace *ai_face = &ai_mesh->mFaces[i_face];
 
-			assert(!(ai_face->mNumIndices % 3));
+			assert(ai_face->mNumIndices == 3);
 			num_verts += ai_face->mNumIndices;
 		}
 	}
