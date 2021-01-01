@@ -34,6 +34,7 @@ $ ./yart --object type=sphere,radius=0.3,pos=-3,1,0,Ks=0.05  \
          \
          --light dir=-0.4,-0.8,0.3,type=distant \
          \
+         --backcolor 3cacd7 \
          --pitch -10 --yaw -55 --pos 10,3,7
 ```
 
@@ -51,5 +52,6 @@ $ ./yart --object type=sphere,radius=0.8,pos=0,1,0,Ks=0.05 \
          --light pos=0,4,1,type=point,intensity=190,color=00ff00  \
          --light pos=2,5,1,type=point,intensity=420,color=0000ff  \
          \
+         --backcolor 3cacd7 \
          --pos=0,1,8
 ```

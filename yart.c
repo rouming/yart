@@ -110,7 +110,7 @@ struct scene {
 	uint32_t width;
 	uint32_t height;
 	float	 fov;
-	vec3_t	 back_color;
+	vec3_t	 backcolor;
 	mat4_t	 c2w;
 	float	 bias;
 	uint32_t max_depth;
@@ -791,7 +791,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 	vec3_t hit_color;
 
 	if (depth > scene->max_depth)
-		return scene->back_color;
+		return scene->backcolor;
 
 	if (trace(scene, orig, dir, &isect, PRIMARY_RAY)) {
 		/* Evaluate surface properties (P, N, texture coordinates, etc.) */
@@ -861,11 +861,11 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			break;
 		}
 		default:
-			hit_color = vec3(0.0f, 0.0f, 0.0f);
+			hit_color = scene->backcolor;
 			break;
 		}
 	} else {
-		hit_color = scene->back_color;
+		hit_color = scene->backcolor;
 	}
 
 	return hit_color;
@@ -1119,6 +1119,8 @@ enum {
 	OPT_CAM_YAW,
 	OPT_CAM_POS,
 
+	OPT_BACKCOLOR,
+
 	OPT_LIGHT,
 	OPT_OBJECT,
 };
@@ -1133,6 +1135,7 @@ static struct option long_options[] = {
 	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
 	{"yaw",       required_argument, 0, OPT_CAM_YAW},
 	{"pos",       required_argument, 0, OPT_CAM_POS},
+	{"backcolor", required_argument, 0, OPT_BACKCOLOR},
 	{"light",     required_argument, 0, OPT_LIGHT},
 	{"object",    required_argument, 0, OPT_OBJECT},
 
@@ -2306,7 +2309,8 @@ static void camera_inc_angles(struct scene *scene, float inc_pitch, float inc_ya
 static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 				  uint32_t width, uint32_t height,
 				  vec3_t cam_pos, float cam_pitch,
-				  float cam_yaw, float fov)
+				  float cam_yaw, float fov,
+				  vec3_t backcolor)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
@@ -2323,7 +2327,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 		.width	      = width,
 		.height	      = height,
 		.fov	      = fov,
-		.back_color   = {0.235294f, 0.67451f, 0.843137f},
+		.backcolor    = backcolor,
 		.c2w	      = m4_identity(),
 		.bias	      = 0.0001,
 		.opencl	      = opencl,
@@ -2669,6 +2673,7 @@ static void usage(void)
 	       "   --yaw       - initial camera yaw angle in degrees (float)\n"
 	       "   --pos       - initial camera position in format x,y,z.\n"
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
+	       "   --backcolor - background color in hex, e.g. for red ff0000\n"
 	       "\n"
 	       "   --light     - add light, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
@@ -2717,6 +2722,7 @@ int main(int argc, char **argv)
 	float cam_yaw = 0.0f;
 	vec3_t cam_pos = vec3(0.0f, 2.0f, 16.0f);
 	float fov = 27.95f; /* 50mm focal lengh */
+	vec3_t backcolor = vec3(0.f, 0.f, 0.f);
 
 	int ret;
 
@@ -2772,6 +2778,18 @@ int main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 			break;
+		case OPT_BACKCOLOR: {
+			uint32_t color;
+			ret = sscanf(optarg, "%x", &color);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid backcolor, should be hex.\n");
+				return -EINVAL;
+			}
+			backcolor.x = ((color>>16) & 0xff) / 255.0f;
+			backcolor.y = ((color>>8) & 0xff) / 255.0f;
+			backcolor.z = (color & 0xff) / 255.0f;
+			break;
+		}
 		case OPT_LIGHT:
 			/* See lights_create() */
 			break;
@@ -2794,8 +2812,8 @@ int main(int argc, char **argv)
 	}
 
 	/* Create scene */
-	scene = scene_create(opencl, one_frame, width, height,
-			     cam_pos, cam_pitch, cam_yaw, fov);
+	scene = scene_create(opencl, one_frame, width, height, cam_pos, cam_pitch,
+			     cam_yaw, fov, backcolor);
 	assert(scene);
 
 	/* Init default objects */
