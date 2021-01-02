@@ -49,6 +49,7 @@
 #define fabsf fabs
 #define sqrtf sqrt
 #define powf  pow
+#define floorf floor
 
 struct scene;
 
@@ -313,7 +314,10 @@ enum ops_type {
 };
 
 enum material_type {
-	MATERIAL_PHONG
+	MATERIAL_PHONG,
+	MATERIAL_DIFFUSE,
+	MATERIAL_REFLECT,
+	MATERIAL_REFLECT_REFRACT,
 };
 
 struct object;
@@ -339,6 +343,7 @@ struct object {
 	mat4_t o2w;
 	enum material_type material;
 	float albedo;
+	float ior; /* index of refraction */
 	float Kd;  /* diffuse weight */
 	float Ks;  /* specular weight */
 	float n;   /* specular exponent */
@@ -700,6 +705,9 @@ static bool trace(__global struct scene *scene, const vec3_t *orig, const vec3_t
 
 		if (object_intersect(obj, orig, dir, &near, &index, &uv) &&
 		    near < isect->near) {
+			if (ray_type == SHADOW_RAY &&
+			    obj->material == MATERIAL_REFLECT_REFRACT)
+				continue;
 			isect->hit_object = obj;
 			isect->near = near;
 			isect->index = index;
@@ -723,7 +731,6 @@ static vec3_t reflect(const vec3_t *I, const vec3_t *N)
 /**
  * Compute refraction direction
  */
-__attribute__((unused))
 static vec3_t refract(const vec3_t *I, const vec3_t *N, float ior)
 {
 	float cosi = clamp(-1.0f, 1.0f, v3_dot(*I, *N));
@@ -754,20 +761,21 @@ static vec3_t refract(const vec3_t *I, const vec3_t *N, float ior)
  * Evaluate Fresnel equation (ration of reflected light for a
  * given incident direction and surface normal)
  */
-__attribute__((unused))
-static void fresnel(const vec3_t *I, const vec3_t *N, float ior, float *kr)
+static float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 {
 	float cosi = clamp(-1.0f, 1.0f, v3_dot(*I, *N));
-	float etai = 1, etat = ior;
+	float etai = 1.0f, etat = ior;
+	float sint, kr;
+
 	if (cosi > 0)
 		SWAP(etai, etat);
 
 	/* Compute sini using Snell's law */
-	float sint = etai / etat * sqrtf(MAX(0.0f, 1.0f - cosi * cosi));
+	sint = etai / etat * sqrtf(MAX(0.0f, 1.0f - cosi * cosi));
 
 	/* Total internal reflection */
-	if (sint >= 1) {
-		*kr = 1;
+	if (sint >= 1.0f) {
+		kr = 1.0f;
 	} else {
 		float cost, Rs, Rp;
 
@@ -775,13 +783,20 @@ static void fresnel(const vec3_t *I, const vec3_t *N, float ior, float *kr)
 		cosi = fabsf(cosi);
 		Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
 		Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
-		*kr = (Rs * Rs + Rp * Rp) / 2;
+		kr = (Rs * Rs + Rp * Rp) / 2;
 	}
 	/*
 	 * As a consequence of the conservation of energy,
 	 * transmittance is given by:
 	 * kt = 1 - kr;
 	 */
+
+	return kr;
+}
+
+static inline float modulo(float f)
+{
+    return f - floorf(f);
 }
 
 static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
@@ -858,6 +873,92 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		diffuse = v3_muls(diffuse, isect.hit_object->Kd);
 		specular = v3_muls(specular, isect.hit_object->Ks);
 		hit_color = v3_add(diffuse, specular);
+		break;
+	}
+	case MATERIAL_DIFFUSE: {
+		/*
+		 * Light loop (loop over all lights in the scene
+		 * and accumulate their contribution)
+		 */
+		__global struct light *light;
+
+		hit_color = vec3(0.0f, 0.0f, 0.0f);
+
+		list_for_each_entry(light, &scene->lights, entry) {
+			vec3_t light_dir, light_intensity;
+			vec3_t point, rev_light_dir;
+			vec3_t diffuse;
+
+			struct intersection isect_shadow;
+			float near;
+			bool obstacle;
+
+			light_illuminate(light, &hit_point, &light_dir,
+					 &light_intensity, &near);
+
+			point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
+			rev_light_dir = v3_muls(light_dir, -1.0f);
+
+			obstacle = !!trace(scene, &point, &rev_light_dir,
+					   &isect_shadow, SHADOW_RAY);
+			if (obstacle)
+				/* Light is not visible, object is hit, thus shadow */
+				continue;
+
+			diffuse = v3_muls(light_intensity, isect.hit_object->albedo *
+					  MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
+			hit_color = v3_add(hit_color, diffuse);
+		}
+		break;
+	}
+	case MATERIAL_REFLECT: {
+		vec3_t reflect_dir;
+
+		reflect_dir = reflect(dir, &hit_normal);
+
+		hit_point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
+		hit_color = ray_cast(scene, &hit_point, &reflect_dir, depth + 1);
+		/* Losing energy on reflection, pure average */
+		hit_color = v3_muls(hit_color, 0.8f);
+		break;
+	}
+	case MATERIAL_REFLECT_REFRACT: {
+		vec3_t refract_color = vec3(0.0f, 0.0f, 0.0f);
+		vec3_t reflect_color = vec3(0.0f, 0.0f, 0.0f);
+		vec3_t reflect_orig, reflect_dir, bias;
+		bool outside;
+		float kr;
+
+		kr = fresnel(dir, &hit_normal, isect.hit_object->ior);
+		outside = v3_dot(*dir, hit_normal) < 0.0f;
+		bias = v3_muls(hit_normal, scene->bias);
+
+
+		/* compute refraction if it is not a case of total internal reflection */
+		if (kr < 1.0f) {
+			vec3_t refract_orig, refract_dir;
+
+			refract_dir = refract(dir, &hit_normal, isect.hit_object->ior);
+			refract_dir = v3_norm(refract_dir);
+
+			refract_orig = outside ?
+				v3_sub(hit_point, bias) :
+				v3_add(hit_point, bias);
+
+			refract_color = ray_cast(scene, &refract_orig, &refract_dir, depth + 1);
+			refract_color = v3_muls(refract_color, 1 - kr);
+		}
+		reflect_dir = reflect(dir, &hit_normal);
+		reflect_dir = v3_norm(reflect_dir);
+
+		reflect_orig = outside ?
+			v3_add(hit_point, bias) :
+			v3_sub(hit_point, bias);
+
+		reflect_color = ray_cast(scene, &reflect_orig, &reflect_dir, depth + 1);
+		reflect_color = v3_muls(reflect_color, kr);
+
+		hit_color = v3_add(reflect_color, refract_color);
 		break;
 	}
 	default:
@@ -1141,12 +1242,14 @@ static struct option long_options[] = {
 
 enum {
 	OBJECT_TYPE,
+	OBJECT_MATERIAL,
 	OBJECT_ROTATE_X,
 	OBJECT_ROTATE_Y,
 	OBJECT_ROTATE_Z,
 	OBJECT_SCALE,
 	OBJECT_TRANSLATE,
 	OBJECT_ALBEDO,
+	OBJECT_IOR,
 	OBJECT_KD,
 	OBJECT_KS,
 	OBJECT_N,
@@ -1158,12 +1261,14 @@ enum {
 
 static char *const object_token[] = {
 	[OBJECT_TYPE]	       = "type",
+	[OBJECT_MATERIAL]      = "material",
 	[OBJECT_ROTATE_X]      = "rotate-x",
 	[OBJECT_ROTATE_Y]      = "rotate-y",
 	[OBJECT_ROTATE_Z]      = "rotate-z",
 	[OBJECT_SCALE]	       = "scale",
 	[OBJECT_TRANSLATE]     = "translate",
 	[OBJECT_ALBEDO]	       = "albedo",
+	[OBJECT_IOR]	       = "ior",
 	[OBJECT_KD]	       = "Kd",
 	[OBJECT_KS]	       = "Ks",
 	[OBJECT_N]	       = "n",
@@ -1174,7 +1279,7 @@ static char *const object_token[] = {
 	NULL
 };
 
-enum {
+enum object_type {
 	UNKNOWN_OBJECT = 0,
 	SPHERE_OBJECT,
 	MESH_OBJECT,
@@ -1183,8 +1288,10 @@ enum {
 struct object_params {
 	int    parsed_params_bits;
 	mat4_t o2w;
-	int    type;
+	enum object_type   type;
+	enum material_type material;
 	float  albedo;
+	float  ior;
 	float  Kd;
 	float  Ks;
 	float  n;
@@ -1201,7 +1308,9 @@ struct object_params {
 static void default_object_params(struct object_params *params)
 {
 	memset(params, 0, sizeof(*params));
+	params->material = MATERIAL_PHONG;
 	params->albedo = 0.18f;
+	params->ior = 1.3f;
 	params->Kd = 0.8f;
 	params->Ks = 0.2f;
 	params->n = 10.0f;
@@ -1216,8 +1325,9 @@ static void object_init(struct object *obj, struct object_ops *ops,
 	INIT_LIST_HEAD(&obj->entry);
 	obj->ops = *ops;
 	obj->o2w = params->o2w;
-	obj->material = MATERIAL_PHONG;
+	obj->material = params->material;
 	obj->albedo = params->albedo;
+	obj->ior = params->ior;
 	obj->Kd = params->Kd;
 	obj->Ks = params->Ks;
 	obj->n = params->n;
@@ -1636,6 +1746,20 @@ static int parse_object_params(char *subopts, struct object_params *params)
 				return -EINVAL;
 			}
 			break;
+		case OBJECT_MATERIAL:
+			if (!strcmp(real_value, "phong"))
+				params->material = MATERIAL_PHONG;
+			else if (!strcmp(real_value, "diffuse"))
+				params->material = MATERIAL_DIFFUSE;
+			else if (!strcmp(real_value, "reflect"))
+				params->material = MATERIAL_REFLECT;
+			else if (!strcmp(real_value, "reflect-refract"))
+				params->material = MATERIAL_REFLECT_REFRACT;
+			else {
+				fprintf(stderr, "Unknown material specified\n");
+				return -EINVAL;
+			}
+			break;
 		case OBJECT_ROTATE_X:
 		case OBJECT_ROTATE_Y:
 		case OBJECT_ROTATE_Z: {
@@ -1682,6 +1806,9 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		}
 		case OBJECT_ALBEDO:
 			fptr = &params->albedo;
+			break;
+		case OBJECT_IOR:
+			fptr = &params->ior;
 			break;
 		case OBJECT_KD:
 			fptr = &params->Kd;
@@ -2685,12 +2812,14 @@ static void usage(void)
 	       "   --object    - add object, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the object, 'mesh' or 'sphere'\n"
 	       "                               can be specified\n"
+	       "                 'material'  - object material (shading), should be 'phong', 'diffuse', 'reflect', 'reflect-refract'\n"
 	       "                 'rotate-x'\n"
 	       "                 'rotate-y'\n"
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
 	       "                 'scale'     - scale on specified vector, accepts float,float,float\n"
 	       "                 'translate' - translates on specified offset vector, accepts float,float,float\n"
 	       "                 'albedo' - albedo\n"
+	       "                 'ior'    - index of refraction\n"
 	       "                 'Kd'     - diffuse weight\n"
 	       "                 'Ks'     - specular weight\n"
 	       "                 'n'      - specular exponent\n"
