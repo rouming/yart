@@ -114,7 +114,7 @@ struct scene {
 	vec3_t	 backcolor;
 	mat4_t	 c2w;
 	float	 bias;
-	uint32_t max_depth;
+	uint32_t ray_depth;
 	struct camera cam;
 	__global struct rgba *framebuffer;
 	struct opencl *opencl;
@@ -808,7 +808,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 	vec2_t hit_tex_coords;
 	bool hit;
 
-	if (depth > scene->max_depth)
+	if (depth > scene->ray_depth)
 		return scene->backcolor;
 
 	hit = trace(scene, orig, dir, &isect, PRIMARY_RAY);
@@ -1218,6 +1218,7 @@ enum {
 	OPT_CAM_POS,
 
 	OPT_BACKCOLOR,
+	OPT_RAY_DEPTH,
 
 	OPT_LIGHT,
 	OPT_OBJECT,
@@ -1234,6 +1235,7 @@ static struct option long_options[] = {
 	{"yaw",	      required_argument, 0, OPT_CAM_YAW},
 	{"pos",	      required_argument, 0, OPT_CAM_POS},
 	{"backcolor", required_argument, 0, OPT_BACKCOLOR},
+	{"ray-depth", required_argument, 0, OPT_RAY_DEPTH},
 	{"light",     required_argument, 0, OPT_LIGHT},
 	{"object",    required_argument, 0, OPT_OBJECT},
 
@@ -2434,7 +2436,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 				  uint32_t width, uint32_t height,
 				  vec3_t cam_pos, float cam_pitch,
 				  float cam_yaw, float fov,
-				  vec3_t backcolor)
+				  vec3_t backcolor, uint32_t ray_depth)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
@@ -2452,10 +2454,10 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 		.height	      = height,
 		.fov	      = fov,
 		.backcolor    = backcolor,
+		.ray_depth    = ray_depth,
 		.c2w	      = m4_identity(),
 		.bias	      = 0.0001,
 		.opencl	      = opencl,
-		.max_depth    = 5,
 		.framebuffer  = framebuffer,
 		.objects      = LIST_HEAD_INIT(scene->objects),
 		.lights	      = LIST_HEAD_INIT(scene->lights),
@@ -2798,6 +2800,7 @@ static void usage(void)
 	       "   --pos       - initial camera position in format x,y,z.\n"
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
 	       "   --backcolor - background color in hex, e.g. for red ff0000\n"
+	       "   --ray-depth - number of ray casting depth, 5 is default\n"
 	       "\n"
 	       "   --light     - add light, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
@@ -2843,6 +2846,7 @@ int main(int argc, char **argv)
 
 	uint32_t width = 1024;
 	uint32_t height = 768;
+	uint32_t ray_depth = 5;
 
 	float cam_pitch = 0.0f;
 	float cam_yaw = 0.0f;
@@ -2908,7 +2912,7 @@ int main(int argc, char **argv)
 			uint32_t color;
 			ret = sscanf(optarg, "%x", &color);
 			if (ret != 1) {
-				fprintf(stderr, "Invalid backcolor, should be hex.\n");
+				fprintf(stderr, "Invalid --backcolor, should be hex.\n");
 				return -EINVAL;
 			}
 			backcolor.x = ((color>>16) & 0xff) / 255.0f;
@@ -2916,6 +2920,15 @@ int main(int argc, char **argv)
 			backcolor.z = (color & 0xff) / 255.0f;
 			break;
 		}
+		case OPT_RAY_DEPTH: {
+			ret = sscanf(optarg, "%u", &ray_depth);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid --ray-depth, unsigned int.\n");
+				return -EINVAL;
+			}
+			break;
+		}
+
 		case OPT_LIGHT:
 			/* See lights_create() */
 			break;
@@ -2939,7 +2952,7 @@ int main(int argc, char **argv)
 
 	/* Create scene */
 	scene = scene_create(opencl, one_frame, width, height, cam_pos, cam_pitch,
-			     cam_yaw, fov, backcolor);
+			     cam_yaw, fov, backcolor, ray_depth);
 	assert(scene);
 
 	/* Init default objects */
