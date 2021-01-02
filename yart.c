@@ -78,7 +78,7 @@ typedef unsigned char uint8_t;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define SWAP(a, b) do { typeof(a) temp = a; a = b; b = temp; } while (0)
 
-#define EPSILON    1e-8
+#define EPSILON	   1e-8
 #define MOVE_SPEED 0.03f
 
 struct opencl;
@@ -1126,15 +1126,15 @@ enum {
 };
 
 static struct option long_options[] = {
-	{"no-opencl", no_argument,       &no_opencl, 1},
-	{"opencl",    no_argument,       &no_opencl, 0},
-	{"one-frame", no_argument,       &one_frame, 1},
-	{"fov",       required_argument, 0, OPT_FOV},
+	{"no-opencl", no_argument,	 &no_opencl, 1},
+	{"opencl",    no_argument,	 &no_opencl, 0},
+	{"one-frame", no_argument,	 &one_frame, 1},
+	{"fov",	      required_argument, 0, OPT_FOV},
 	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
 	{"height",    required_argument, 0, OPT_SCREEN_HEIGHT},
 	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
-	{"yaw",       required_argument, 0, OPT_CAM_YAW},
-	{"pos",       required_argument, 0, OPT_CAM_POS},
+	{"yaw",	      required_argument, 0, OPT_CAM_YAW},
+	{"pos",	      required_argument, 0, OPT_CAM_POS},
 	{"backcolor", required_argument, 0, OPT_BACKCOLOR},
 	{"light",     required_argument, 0, OPT_LIGHT},
 	{"object",    required_argument, 0, OPT_OBJECT},
@@ -1160,21 +1160,21 @@ enum {
 };
 
 static char *const object_token[] = {
-	[OBJECT_TYPE]          = "type",
+	[OBJECT_TYPE]	       = "type",
 	[OBJECT_ROTATE_X]      = "rotate-x",
 	[OBJECT_ROTATE_Y]      = "rotate-y",
 	[OBJECT_ROTATE_Z]      = "rotate-z",
-	[OBJECT_SCALE]         = "scale",
+	[OBJECT_SCALE]	       = "scale",
 	[OBJECT_TRANSLATE]     = "translate",
-        [OBJECT_ALBEDO]        = "albedo",
-        [OBJECT_KD]            = "Kd",
-	[OBJECT_KS]            = "Ks",
-	[OBJECT_N]             = "n",
+	[OBJECT_ALBEDO]	       = "albedo",
+	[OBJECT_KD]	       = "Kd",
+	[OBJECT_KS]	       = "Ks",
+	[OBJECT_N]	       = "n",
 	[OBJECT_MESH_FILE]     = "file",
 	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
 	[OBJECT_SPHERE_RADIUS] = "radius",
 	[OBJECT_SPHERE_POS]    = "pos",
-        NULL
+	NULL
 };
 
 enum {
@@ -1498,10 +1498,10 @@ static int triangle_mesh_load_obj(struct scene *scene,
 	int ret, i;
 
 	ai_scene = aiImportFile(params->mesh.file,
-				aiProcess_CalcTangentSpace       |
-				aiProcess_Triangulate            |
-				aiProcess_JoinIdenticalVertices  |
-				aiProcess_SortByPType            |
+				aiProcess_CalcTangentSpace	 |
+				aiProcess_Triangulate		 |
+				aiProcess_JoinIdenticalVertices	 |
+				aiProcess_SortByPType		 |
 				(params->mesh.smooth_shading ?
 				 aiProcess_GenSmoothNormals :
 				 aiProcess_GenNormals));
@@ -1914,7 +1914,7 @@ static int distant_light_unmap(struct light *light)
 }
 
 struct light_ops distant_light_ops = {
-	.destroy         = distant_light_destroy,
+	.destroy	 = distant_light_destroy,
 	.unmap		 = distant_light_unmap,
 	.illuminate	 = distant_light_illuminate,
 	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
@@ -1949,7 +1949,7 @@ static int point_light_unmap(struct light *light)
 }
 
 struct light_ops point_light_ops = {
-	.destroy         = point_light_destroy,
+	.destroy	 = point_light_destroy,
 	.unmap		 = point_light_unmap,
 	.illuminate	 = point_light_illuminate,
 	.illuminate_type = POINT_LIGHT_ILLUMINATE,
@@ -1971,11 +1971,11 @@ enum {
 };
 
 static char *const light_token[] = {
-	[LIGHT_TYPE]      = "type",
-	[LIGHT_COLOR]     = "color",
+	[LIGHT_TYPE]	  = "type",
+	[LIGHT_COLOR]	  = "color",
 	[LIGHT_INTENSITY] = "intensity",
-	[LIGHT_DIR]       = "dir",
-	[LIGHT_POS]       = "pos",
+	[LIGHT_DIR]	  = "dir",
+	[LIGHT_POS]	  = "pos",
 };
 
 enum {
