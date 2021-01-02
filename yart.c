@@ -788,84 +788,81 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		       const vec3_t *dir, uint32_t depth)
 {
 	struct intersection isect;
-	vec3_t hit_color;
+
+	vec3_t hit_point, hit_normal, hit_color;
+	vec2_t hit_tex_coords;
+	bool hit;
 
 	if (depth > scene->max_depth)
 		return scene->backcolor;
 
-	if (trace(scene, orig, dir, &isect, PRIMARY_RAY)) {
-		/* Evaluate surface properties (P, N, texture coordinates, etc.) */
+	hit = trace(scene, orig, dir, &isect, PRIMARY_RAY);
+	if (!hit)
+		return scene->backcolor;
 
-		vec3_t hit_point;
-		vec3_t hit_normal;
-		vec2_t hit_tex_coords;
+	/* Evaluate surface properties (P, N, texture coordinates, etc.) */
+	hit_point = v3_add(v3_muls(*dir, isect.near), *orig);
+	object_get_surface_props(isect.hit_object, &hit_point, dir, isect.index,
+				 &isect.uv, &hit_normal, &hit_tex_coords);
+	switch (isect.hit_object->material) {
+	case MATERIAL_PHONG: {
+		/*
+		 * Light loop (loop over all lights in the scene
+		 * and accumulate their contribution)
+		 */
+		vec3_t diffuse, specular;
+		__global struct light *light;
 
-		hit_point = v3_add(v3_muls(*dir, isect.near), *orig);
-		object_get_surface_props(isect.hit_object, &hit_point, dir,
-					 isect.index, &isect.uv,
-					 &hit_normal, &hit_tex_coords);
-		switch (isect.hit_object->material) {
-		case MATERIAL_PHONG: {
+		diffuse = specular = vec3(0.0f, 0.0f, 0.0f);
+
+		list_for_each_entry(light, &scene->lights, entry) {
+			vec3_t light_dir, light_intensity;
+			vec3_t point, rev_light_dir, R;
+			vec3_t rev_dir, diff, spec;
+
+			struct intersection isect_shadow;
+			float near, p;
+			bool obstacle;
+
+			light_illuminate(light, &hit_point, &light_dir,
+					 &light_intensity, &near);
+
+			point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
+			rev_light_dir = v3_muls(light_dir, -1.0f);
+
+			obstacle = !!trace(scene, &point, &rev_light_dir,
+					   &isect_shadow, SHADOW_RAY);
+			if (obstacle)
+				/* Light is not visible, object is hit, thus shadow */
+				continue;
+
+			/* compute the diffuse component */
+			diff = v3_muls(light_intensity, isect.hit_object->albedo *
+				       MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
+			diffuse = v3_add(diffuse, diff);
+
 			/*
-			 * Light loop (loop over all lights in the scene
-			 * and accumulate their contribution)
+			 * compute the specular component
+			 * what would be the ideal reflection direction for this
+			 * light ray
 			 */
-			vec3_t diffuse, specular;
-			__global struct light *light;
+			R = reflect(&light_dir, &hit_normal);
 
-			diffuse = specular = vec3(0.0f, 0.0f, 0.0f);
+			rev_dir = v3_muls(*dir, -1.0f);
 
-			list_for_each_entry(light, &scene->lights, entry) {
-				vec3_t light_dir, light_intensity;
-				vec3_t point, rev_light_dir, R;
-				vec3_t rev_dir, diff, spec;
-
-				struct intersection isect_shadow;
-				float near, p;
-				bool obstacle;
-
-				light_illuminate(light, &hit_point, &light_dir,
-						 &light_intensity, &near);
-
-				point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
-				rev_light_dir = v3_muls(light_dir, -1.0f);
-
-				obstacle = !!trace(scene, &point, &rev_light_dir,
-						   &isect_shadow, SHADOW_RAY);
-				if (obstacle)
-					/* Light is not visible, object is hit, thus shadow */
-					continue;
-
-				/* compute the diffuse component */
-				diff = v3_muls(light_intensity, isect.hit_object->albedo *
-					       MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
-				diffuse = v3_add(diffuse, diff);
-
-				/*
-				 * compute the specular component
-				 * what would be the ideal reflection direction for this
-				 * light ray
-				 */
-				R = reflect(&light_dir, &hit_normal);
-
-				rev_dir = v3_muls(*dir, -1.0f);
-
-				p = powf(MAX(0.0f, v3_dot(R, rev_dir)), isect.hit_object->n);
-				spec = v3_muls(light_intensity, p);
-				specular = v3_add(specular, spec);
-			}
-			/* Compute the whole light contribution */
-			diffuse = v3_muls(diffuse, isect.hit_object->Kd);
-			specular = v3_muls(specular, isect.hit_object->Ks);
-			hit_color = v3_add(diffuse, specular);
-			break;
+			p = powf(MAX(0.0f, v3_dot(R, rev_dir)), isect.hit_object->n);
+			spec = v3_muls(light_intensity, p);
+			specular = v3_add(specular, spec);
 		}
-		default:
-			hit_color = scene->backcolor;
-			break;
-		}
-	} else {
+		/* Compute the whole light contribution */
+		diffuse = v3_muls(diffuse, isect.hit_object->Kd);
+		specular = v3_muls(specular, isect.hit_object->Ks);
+		hit_color = v3_add(diffuse, specular);
+		break;
+	}
+	default:
 		hit_color = scene->backcolor;
+		break;
 	}
 
 	return hit_color;
