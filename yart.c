@@ -1791,9 +1791,14 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			ret = sscanf(value, "%f,%f,%f%n", &vec.x, &vec.y, &vec.z,
 				     &num);
 			if (ret != 3) {
-				fprintf(stderr, "Invalid object '%s' parameter\n",
-					object_token[c]);
-				return -EINVAL;
+				ret = sscanf(value, "%f%n", &vec.x, &num);
+				if (ret != 1) {
+					fprintf(stderr, "Invalid object '%s' parameter\n",
+						object_token[c]);
+					return -EINVAL;
+				}
+				/* Apply single value to all others */
+				vec.y = vec.z = vec.x;
 			}
 			subopts = value + num;
 			if (subopts[0] == ',')
@@ -2819,7 +2824,7 @@ static void usage(void)
 	       "                 'rotate-x'\n"
 	       "                 'rotate-y'\n"
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
-	       "                 'scale'     - scale on specified vector, accepts float,float,float\n"
+	       "                 'scale'     - scale on specified vector, accepts a single float or float,float,float\n"
 	       "                 'translate' - translates on specified offset vector, accepts float,float,float\n"
 	       "                 'albedo' - albedo\n"
 	       "                 'ior'    - index of refraction\n"
