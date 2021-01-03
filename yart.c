@@ -407,7 +407,7 @@ static void sphere_get_surface_props(__global struct object *obj,
 	*hit_normal = v3_norm(v3_sub(*hit_point, sphere->center));
 
 	/*
-	 * In this particular case, the normal is simular to a point on a unit sphere
+	 * In this particular case, the normal is similar to a point on a unit sphere
 	 * centred around the origin. We can thus use the normal coordinates to compute
 	 * the spherical coordinates of Phit.
 	 * atan2 returns a value in the range [-pi, pi] and we need to remap it to range [0, 1]
@@ -816,7 +816,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		return scene->backcolor;
 
 	/* Evaluate surface properties (P, N, texture coordinates, etc.) */
-	hit_point = v3_add(v3_muls(*dir, isect.near), *orig);
+	hit_point = v3_add(*orig, v3_muls(*dir, isect.near));
 	object_get_surface_props(isect.hit_object, &hit_point, dir, isect.index,
 				 &isect.uv, &hit_normal, &hit_tex_coords);
 	switch (isect.hit_object->material) {
@@ -1002,7 +1002,7 @@ __kernel void render_opencl(__global struct scene *scene)
 	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 	dir = v3_norm(dir);
 
-	color = ray_cast(scene, &orig, &dir, 0);
+	color = ray_cast(scene, &orig, &dir, 1);
 	color_vec_to_rgba32(&color, &scene->framebuffer[i]);
 }
 
@@ -2530,7 +2530,7 @@ static void render_soft(struct scene *scene)
 			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
 			dir = v3_norm(dir);
 
-			color = ray_cast(scene, &orig, &dir, 0);
+			color = ray_cast(scene, &orig, &dir, 1);
 			color_vec_to_rgba32(&color, pix);
 			pix++;
 		}
