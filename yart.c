@@ -280,6 +280,11 @@ static inline float deg2rad(float deg)
 	return deg * M_PI / 180;
 }
 
+static inline float modulo(float f)
+{
+    return f - floorf(f);
+}
+
 /**
  * Compute the roots of a quadratic equation
  */
@@ -320,6 +325,11 @@ enum material_type {
 	MATERIAL_REFLECT_REFRACT,
 };
 
+enum pattern_type {
+	PATTERN_UNKNOWN,
+	PATTERN_CHECK
+};
+
 struct object;
 
 struct object_ops {
@@ -342,6 +352,7 @@ struct object {
 	struct list_head entry;
 	mat4_t o2w;
 	enum material_type material;
+	enum pattern_type pattern;
 	float albedo;
 	float ior; /* index of refraction */
 	float Kd;  /* diffuse weight */
@@ -656,6 +667,23 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 #endif
 }
 
+static inline float object_pattern(__global struct object *obj,
+				   vec2_t *hit_tex_coords)
+{
+	if (obj->pattern == PATTERN_CHECK) {
+		float angle = deg2rad(0);
+		float co = cos(angle);
+		float si = sin(angle);
+		float s = hit_tex_coords->x * co - hit_tex_coords->y * si;
+		float t = hit_tex_coords->y * co + hit_tex_coords->x * si;
+		float scale = 5;
+
+		return (modulo(s * scale) < 0.5) ^ (modulo(t * scale) < 0.5);
+	}
+
+	return 1.0f;
+}
+
 static inline void
 light_illuminate(__global struct light *light, const vec3_t *orig,
 		 vec3_t *dir, vec3_t *intensity, float *distance)
@@ -794,11 +822,6 @@ static float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 	return kr;
 }
 
-static inline float modulo(float f)
-{
-    return f - floorf(f);
-}
-
 static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		       const vec3_t *dir, uint32_t depth)
 {
@@ -836,7 +859,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			vec3_t rev_dir, diff, spec;
 
 			struct intersection isect_shadow;
-			float near, p;
+			float near, pattern, p;
 			bool obstacle;
 
 			light_illuminate(light, &hit_point, &light_dir,
@@ -852,7 +875,9 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 				continue;
 
 			/* compute the diffuse component */
-			diff = v3_muls(light_intensity, isect.hit_object->albedo *
+			pattern = object_pattern(isect.hit_object, &hit_tex_coords);
+			diff = v3_muls(light_intensity,
+				       pattern * isect.hit_object->albedo *
 				       MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
 			diffuse = v3_add(diffuse, diff);
 
@@ -890,7 +915,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			vec3_t diffuse;
 
 			struct intersection isect_shadow;
-			float near;
+			float near, pattern;
 			bool obstacle;
 
 			light_illuminate(light, &hit_point, &light_dir,
@@ -905,8 +930,12 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 				/* Light is not visible, object is hit, thus shadow */
 				continue;
 
-			diffuse = v3_muls(light_intensity, isect.hit_object->albedo *
+			/* Is equal to 1.0 if no pattern */
+			pattern = object_pattern(isect.hit_object, &hit_tex_coords);
+			diffuse = v3_muls(light_intensity,
+					  pattern * isect.hit_object->albedo *
 					  MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
+
 			hit_color = v3_add(hit_color, diffuse);
 		}
 		break;
@@ -1250,6 +1279,7 @@ enum {
 	OBJECT_ROTATE_Z,
 	OBJECT_SCALE,
 	OBJECT_TRANSLATE,
+	OBJECT_PATTERN,
 	OBJECT_ALBEDO,
 	OBJECT_IOR,
 	OBJECT_KD,
@@ -1269,6 +1299,7 @@ static char *const object_token[] = {
 	[OBJECT_ROTATE_Z]      = "rotate-z",
 	[OBJECT_SCALE]	       = "scale",
 	[OBJECT_TRANSLATE]     = "translate",
+	[OBJECT_PATTERN]       = "pattern",
 	[OBJECT_ALBEDO]	       = "albedo",
 	[OBJECT_IOR]	       = "ior",
 	[OBJECT_KD]	       = "Kd",
@@ -1292,6 +1323,7 @@ struct object_params {
 	mat4_t o2w;
 	enum object_type   type;
 	enum material_type material;
+	enum pattern_type  pattern;
 	float  albedo;
 	float  ior;
 	float  Kd;
@@ -1311,6 +1343,7 @@ static void default_object_params(struct object_params *params)
 {
 	memset(params, 0, sizeof(*params));
 	params->material = MATERIAL_PHONG;
+	params->pattern = PATTERN_UNKNOWN;
 	params->albedo = 0.18f;
 	params->ior = 1.3f;
 	params->Kd = 0.8f;
@@ -1328,6 +1361,7 @@ static void object_init(struct object *obj, struct object_ops *ops,
 	obj->ops = *ops;
 	obj->o2w = params->o2w;
 	obj->material = params->material;
+	obj->pattern = params->pattern;
 	obj->albedo = params->albedo;
 	obj->ior = params->ior;
 	obj->Kd = params->Kd;
@@ -1809,6 +1843,17 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			else
 				m = m4_translation(vec);
 			params->o2w = m4_mul(params->o2w, m);
+			break;
+		}
+		case OBJECT_PATTERN: {
+			if (!strcmp(real_value, "check"))
+				params->pattern = PATTERN_CHECK;
+			else {
+				fprintf(stderr, "Invalid object pattern type '%s'\n",
+					real_value);
+				return -EINVAL;
+			}
+
 			break;
 		}
 		case OBJECT_ALBEDO:
@@ -2826,6 +2871,7 @@ static void usage(void)
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
 	       "                 'scale'     - scale on specified vector, accepts a single float or float,float,float\n"
 	       "                 'translate' - translates on specified offset vector, accepts float,float,float\n"
+	       "                 'pattern'   - apply pattern on object using UV coordinates, should be 'check'\n"
 	       "                 'albedo' - albedo\n"
 	       "                 'ior'    - index of refraction\n"
 	       "                 'Kd'     - diffuse weight\n"
