@@ -320,7 +320,6 @@ enum ops_type {
 
 enum material_type {
 	MATERIAL_PHONG,
-	MATERIAL_DIFFUSE,
 	MATERIAL_REFLECT,
 	MATERIAL_REFLECT_REFRACT,
 };
@@ -898,46 +897,6 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		diffuse = v3_mul(diffuse, isect.hit_object->Kd);
 		specular = v3_mul(specular, isect.hit_object->Ks);
 		hit_color = v3_add(diffuse, specular);
-		break;
-	}
-	case MATERIAL_DIFFUSE: {
-		/*
-		 * Light loop (loop over all lights in the scene
-		 * and accumulate their contribution)
-		 */
-		__global struct light *light;
-
-		hit_color = vec3(0.0f, 0.0f, 0.0f);
-
-		list_for_each_entry(light, &scene->lights, entry) {
-			vec3_t light_dir, light_intensity;
-			vec3_t point, rev_light_dir;
-			vec3_t diffuse;
-
-			struct intersection isect_shadow;
-			float near, pattern;
-			bool obstacle;
-
-			light_illuminate(light, &hit_point, &light_dir,
-					 &light_intensity, &near);
-
-			point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
-			rev_light_dir = v3_muls(light_dir, -1.0f);
-
-			obstacle = !!trace(scene, &point, &rev_light_dir,
-					   &isect_shadow, SHADOW_RAY);
-			if (obstacle)
-				/* Light is not visible, object is hit, thus shadow */
-				continue;
-
-			/* Is equal to 1.0 if no pattern */
-			pattern = object_pattern(isect.hit_object, &hit_tex_coords);
-			diffuse = v3_muls(light_intensity,
-					  pattern * isect.hit_object->albedo *
-					  MAX(0.0f, v3_dot(hit_normal, rev_light_dir)));
-
-			hit_color = v3_add(hit_color, diffuse);
-		}
 		break;
 	}
 	case MATERIAL_REFLECT: {
@@ -1785,8 +1744,6 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		case OBJECT_MATERIAL:
 			if (!strcmp(real_value, "phong"))
 				params->material = MATERIAL_PHONG;
-			else if (!strcmp(real_value, "diffuse"))
-				params->material = MATERIAL_DIFFUSE;
 			else if (!strcmp(real_value, "reflect"))
 				params->material = MATERIAL_REFLECT;
 			else if (!strcmp(real_value, "reflect-refract"))
@@ -2869,7 +2826,7 @@ static void usage(void)
 	       "   --object    - add object, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the object, 'mesh' or 'sphere'\n"
 	       "                               can be specified\n"
-	       "                 'material'  - object material (shading), should be 'phong', 'diffuse', 'reflect', 'reflect-refract'\n"
+	       "                 'material'  - object material (shading), should be 'phong', 'reflect', 'reflect-refract'\n"
 	       "                 'rotate-x'\n"
 	       "                 'rotate-y'\n"
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
