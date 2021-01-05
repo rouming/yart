@@ -353,11 +353,11 @@ struct object {
 	mat4_t o2w;
 	enum material_type material;
 	enum pattern_type pattern;
-	float albedo;
-	float ior; /* index of refraction */
-	float Kd;  /* diffuse weight */
-	float Ks;  /* specular weight */
-	float n;   /* specular exponent */
+	float  albedo;
+	float  ior; /* index of refraction */
+	vec3_t Kd;  /* diffuse weight for each RGB channel */
+	vec3_t Ks;  /* specular weight for each RGB channel */
+	float  n;   /* specular exponent */
 };
 
 struct sphere {
@@ -895,8 +895,8 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			specular = v3_add(specular, spec);
 		}
 		/* Compute the whole light contribution */
-		diffuse = v3_muls(diffuse, isect.hit_object->Kd);
-		specular = v3_muls(specular, isect.hit_object->Ks);
+		diffuse = v3_mul(diffuse, isect.hit_object->Kd);
+		specular = v3_mul(specular, isect.hit_object->Ks);
 		hit_color = v3_add(diffuse, specular);
 		break;
 	}
@@ -1326,8 +1326,8 @@ struct object_params {
 	enum pattern_type  pattern;
 	float  albedo;
 	float  ior;
-	float  Kd;
-	float  Ks;
+	vec3_t Kd;
+	vec3_t Ks;
 	float  n;
 	struct {
 		char  file[512];
@@ -1346,8 +1346,8 @@ static void default_object_params(struct object_params *params)
 	params->pattern = PATTERN_UNKNOWN;
 	params->albedo = 0.18f;
 	params->ior = 1.3f;
-	params->Kd = 0.8f;
-	params->Ks = 0.2f;
+	params->Kd = vec3(0.8f, 0.8f, 0.8f);
+	params->Ks = vec3(0.2f, 0.2f, 0.2f);
 	params->n = 10.0f;
 	params->sphere.radius = 0.5f;
 	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
@@ -1817,10 +1817,11 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			params->o2w = m4_mul(params->o2w, m);
 			break;
 		}
+		case OBJECT_KD:
+		case OBJECT_KS:
 		case OBJECT_SCALE:
 		case OBJECT_TRANSLATE: {
 			vec3_t vec;
-			mat4_t m;
 
 			ret = sscanf(value, "%f,%f,%f%n", &vec.x, &vec.y, &vec.z,
 				     &num);
@@ -1838,11 +1839,20 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			if (subopts[0] == ',')
 				/* Skip trailing comma */
 				subopts += 1;
-			if (c == OBJECT_SCALE)
-				m = m4_scaling(vec);
-			else
-				m = m4_translation(vec);
-			params->o2w = m4_mul(params->o2w, m);
+
+			if (c == OBJECT_SCALE || c == OBJECT_TRANSLATE) {
+				mat4_t m;
+
+				if (c == OBJECT_SCALE)
+					m = m4_scaling(vec);
+				else
+					m = m4_translation(vec);
+				params->o2w = m4_mul(params->o2w, m);
+			} else if (c == OBJECT_KD) {
+				params->Kd = vec;
+			} else if (c == OBJECT_KS) {
+				params->Ks = vec;
+			}
 			break;
 		}
 		case OBJECT_PATTERN: {
@@ -1861,12 +1871,6 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			break;
 		case OBJECT_IOR:
 			fptr = &params->ior;
-			break;
-		case OBJECT_KD:
-			fptr = &params->Kd;
-			break;
-		case OBJECT_KS:
-			fptr = &params->Ks;
 			break;
 		case OBJECT_N:
 			fptr = &params->n;
@@ -2874,8 +2878,8 @@ static void usage(void)
 	       "                 'pattern'   - apply pattern on object using UV coordinates, should be 'check'\n"
 	       "                 'albedo' - albedo\n"
 	       "                 'ior'    - index of refraction\n"
-	       "                 'Kd'     - diffuse weight\n"
-	       "                 'Ks'     - specular weight\n"
+	       "                 'Kd'     - diffuse weight, accepts float or float,float,float\n"
+	       "                 'Ks'     - specular weight, accepts float or float,float,float\n"
 	       "                 'n'      - specular exponent\n"
 	       "                Sphere:\n"
 	       "                 'radius' - sphere radius\n"
