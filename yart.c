@@ -46,6 +46,7 @@
 #define cosf  cos
 #define tanf  tan
 #define acosf acos
+#define atan2f atan2
 #define fabsf fabs
 #define sqrtf sqrt
 #define powf  pow
@@ -423,7 +424,7 @@ static void sphere_get_surface_props(__global struct object *obj,
 	 * atan2 returns a value in the range [-pi, pi] and we need to remap it to range [0, 1]
 	 * acosf returns a value in the range [0, pi] and we also need to remap it to the range [0, 1]
 	 */
-	hit_tex_coords->x = (1 + atan2(hit_normal->z, hit_normal->x) / M_PI) * 0.5;
+	hit_tex_coords->x = (1.0f + atan2f(hit_normal->z, hit_normal->x) / M_PI) * 0.5f;
 	hit_tex_coords->y = acosf(hit_normal->y) / M_PI;
 }
 
