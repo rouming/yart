@@ -312,6 +312,9 @@ enum ops_type {
 	SPHERE_INTERSECT,
 	SPHERE_GET_SURFACE_PROPS,
 
+	PLANE_INTERSECT,
+	PLANE_GET_SURFACE_PROPS,
+
 	TRIANGLE_MESH_INTERSECT,
 	TRIANGLE_MESH_GET_SURFACE_PROPS,
 
@@ -426,6 +429,64 @@ static void sphere_get_surface_props(__global struct object *obj,
 	 */
 	hit_tex_coords->x = (1.0f + atan2f(hit_normal->z, hit_normal->x) / M_PI) * 0.5f;
 	hit_tex_coords->y = acosf(hit_normal->y) / M_PI;
+}
+
+struct plane {
+	struct object obj;
+	/*
+	 * Components of generic plane equation: Ax + By + Cy + d = 0,
+	 * where normal = (A, B, C)
+	 */
+	vec3_t normal;
+	float  d;
+
+	/* Basis on 3D plane to make UV mapping */
+	vec3_t b1;
+	vec3_t b2;
+};
+
+static bool plane_intersect(__global struct object *obj, const vec3_t *orig,
+			    const vec3_t *dir, float *near, uint32_t *index,
+			    vec2_t *uv)
+{
+	__global struct plane *plane;
+
+	/* not used in plane */
+	*index = 0;
+	*uv = vec2(0.0f, 0.0f);
+
+	plane = container_of(obj, typeof(*plane), obj);
+
+	/*
+	 * Plane in a general form: Ax + By + Cz + d = 0,
+	 * where Normal = (A, B, C), thus:
+	 *   dot(Normal, orig + dist * dir) + d = 0
+	 *   dot(Normal, orig) + dot(Normal, dist * dir) + d = 0
+	 *   dot(Normal, orig) + dist * dot(Normal, dir) + d = 0
+	 *   dist = -(dot(Normal, orig) + d) / dot(Normal, dir)
+	 */
+	*near = -(v3_dot(plane->normal, *orig) + plane->d) /
+		  v3_dot(plane->normal, *dir);
+
+	/* If negative plane is behind the camera */
+	return *near > 0;
+}
+
+static void plane_get_surface_props(__global struct object *obj,
+				     const vec3_t *hit_point,
+				     const vec3_t *dir, uint32_t index,
+				     const vec2_t *uv, vec3_t *hit_normal,
+				     vec2_t *hit_tex_coords)
+{
+	__global struct plane *plane;
+
+	plane = container_of(obj, typeof(*plane), obj);
+
+	/* Project 3D point to 2D plane */
+	hit_tex_coords->x = v3_dot(plane->b1, *hit_point);
+	hit_tex_coords->y = v3_dot(plane->b2, *hit_point);
+
+	*hit_normal = plane->normal;
 }
 
 struct triangle_mesh {
@@ -632,6 +693,8 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 	switch (obj->ops.intersect_type) {
 	case SPHERE_INTERSECT:
 		return sphere_intersect(obj, orig, dir, near, index, uv);
+	case PLANE_INTERSECT:
+		return plane_intersect(obj, orig, dir, near, index, uv);
 	case TRIANGLE_MESH_INTERSECT:
 		return triangle_mesh_intersect(obj, orig, dir, near, index, uv);
 	default:
@@ -655,6 +718,10 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 	case SPHERE_GET_SURFACE_PROPS:
 		sphere_get_surface_props(obj, hit_point, dir, index,
 					 uv, hit_normal, hit_tex_coords);
+		return;
+	case PLANE_GET_SURFACE_PROPS:
+		plane_get_surface_props(obj, hit_point, dir, index,
+					uv, hit_normal, hit_tex_coords);
 		return;
 	case TRIANGLE_MESH_GET_SURFACE_PROPS:
 		triangle_mesh_get_surface_props(obj, hit_point, dir, index,
@@ -1165,6 +1232,31 @@ struct object_ops sphere_ops = {
 	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
+static void plane_destroy(struct object *obj)
+{
+	struct plane *plane =
+		container_of(obj, struct plane, obj);
+
+	buf_destroy(plane);
+}
+
+static int plane_unmap(struct object *obj)
+{
+	struct plane *plane =
+		container_of(obj, struct plane, obj);
+
+	return buf_unmap(plane);
+}
+
+struct object_ops plane_ops = {
+	.destroy		= plane_destroy,
+	.unmap			= plane_unmap,
+	.intersect		= plane_intersect,
+	.intersect_type		= PLANE_INTERSECT,
+	.get_surface_props	= plane_get_surface_props,
+	.get_surface_props_type = PLANE_GET_SURFACE_PROPS,
+};
+
 static void triangle_mesh_destroy(struct object *obj)
 {
 	struct triangle_mesh *mesh =
@@ -1249,6 +1341,8 @@ enum {
 	OBJECT_MESH_SMOOTH_SHADING,
 	OBJECT_SPHERE_RADIUS,
 	OBJECT_SPHERE_POS,
+	OBJECT_PLANE_NORMAL,
+	OBJECT_PLANE_D,
 };
 
 static char *const object_token[] = {
@@ -1269,12 +1363,15 @@ static char *const object_token[] = {
 	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
 	[OBJECT_SPHERE_RADIUS] = "radius",
 	[OBJECT_SPHERE_POS]    = "pos",
+	[OBJECT_PLANE_NORMAL]  = "normal",
+	[OBJECT_PLANE_D]       = "d",
 	NULL
 };
 
 enum object_type {
 	UNKNOWN_OBJECT = 0,
 	SPHERE_OBJECT,
+	PLANE_OBJECT,
 	MESH_OBJECT,
 };
 
@@ -1297,6 +1394,10 @@ struct object_params {
 		float  radius;
 		vec3_t pos;
 	} sphere;
+	struct {
+		vec3_t normal;
+		float  d;
+	} plane;
 };
 
 static void default_object_params(struct object_params *params)
@@ -1311,6 +1412,8 @@ static void default_object_params(struct object_params *params)
 	params->n = 10.0f;
 	params->sphere.radius = 0.5f;
 	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
+	params->plane.normal = vec3(0.0f, 1.0f, 0.0f);
+	params->plane.d = 0.0f;
 	params->o2w = m4_identity();
 }
 
@@ -1348,6 +1451,23 @@ static void sphere_init(struct sphere *sphere, struct object_params *params)
 	object_init(&sphere->obj, &sphere_ops, params);
 	sphere_set_radius(sphere, params->sphere.radius);
 	sphere_set_pos(sphere, params->sphere.pos);
+}
+
+static void plane_init(struct plane *plane, struct object_params *params)
+{
+	vec3_t up;
+
+	object_init(&plane->obj, &plane_ops, params);
+	plane->normal = v3_norm(params->plane.normal);
+	plane->d = params->plane.d;
+
+	up = vec3(0.0f, 1.0f, 0.0f);
+	if (v3_dot(up, plane->normal) >= 0.999)
+		up = vec3(1.0f, 0.0f, 0.0f);
+
+	/* Form two basis vectors */
+	plane->b1 = v3_cross(plane->normal, up);
+	plane->b2 = v3_cross(plane->normal, plane->b1);
 }
 
 static void triangle_mesh_init(struct opencl *opencl, struct object_params *params,
@@ -1734,6 +1854,8 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		case OBJECT_TYPE:
 			if (!strcmp(real_value, "sphere"))
 				params->type = SPHERE_OBJECT;
+			else if (!strcmp(real_value, "plane"))
+				params->type = PLANE_OBJECT;
 			else if (!strcmp(real_value, "mesh"))
 				params->type = MESH_OBJECT;
 			else {
@@ -1833,14 +1955,17 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		case OBJECT_N:
 			fptr = &params->n;
 			break;
-		case OBJECT_SPHERE_RADIUS: {
+		case OBJECT_SPHERE_RADIUS:
 			fptr = &params->sphere.radius;
 			break;
-		}
-		case OBJECT_SPHERE_POS: {
-			ret = sscanf(value, "%f,%f,%f%n", &params->sphere.pos.x,
-				     &params->sphere.pos.y, &params->sphere.pos.z,
-				     &num);
+		case OBJECT_PLANE_D:
+			fptr = &params->plane.d;
+			break;
+		case OBJECT_SPHERE_POS:
+		case OBJECT_PLANE_NORMAL: {
+			vec3_t vec;
+
+			ret = sscanf(value, "%f,%f,%f%n", &vec.x, &vec.y, &vec.z, &num);
 			if (ret != 3) {
 				fprintf(stderr, "Invalid object '%s' parameter\n",
 					object_token[c]);
@@ -1850,6 +1975,12 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			if (subopts[0] == ',')
 				/* Skip trailing comma */
 				subopts += 1;
+
+			if (c == OBJECT_SPHERE_POS) {
+				params->sphere.pos = vec;
+			} else if (c == OBJECT_PLANE_NORMAL) {
+				params->plane.normal = vec;
+			}
 			break;
 		}
 		case OBJECT_MESH_FILE: {
@@ -1923,6 +2054,13 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			return -EINVAL;
 		}
 		break;
+	case PLANE_OBJECT:
+		if (is_parsed_object_param(params, OBJECT_MESH_FILE)) {
+			fprintf(stderr, "Invalid parameter '%s' for 'plane' object type\n",
+				object_token[OBJECT_MESH_FILE]);
+			return -EINVAL;
+		}
+		break;
 	case MESH_OBJECT:
 		if (!is_parsed_object_param(params, OBJECT_MESH_FILE)) {
 			fprintf(stderr, "Required parameter 'file' for 'mesh' object is not specified\n");
@@ -1967,6 +2105,16 @@ static int objects_create_from_params(struct scene *scene,
 			return -ENOMEM;
 		sphere_init(sphere, params);
 		list_add_tail(&sphere->obj.entry, &scene->objects);
+		return 0;
+	}
+	case PLANE_OBJECT: {
+		struct plane *plane;
+
+		plane = buf_allocate(scene->opencl, sizeof(*plane));
+		if (!plane)
+			return -ENOMEM;
+		plane_init(plane, params);
+		list_add_tail(&plane->obj.entry, &scene->objects);
 		return 0;
 	}
 	case MESH_OBJECT: {
@@ -2825,7 +2973,7 @@ static void usage(void)
 	       "                 'pos'        - position of the point light\n"
 	       "\n"
 	       "   --object    - add object, comma separated parameters should follow:\n"
-	       "                 'type'      - required parameter, specifies type of the object, 'mesh' or 'sphere'\n"
+	       "                 'type'      - required parameter, specifies type of the object, 'mesh', 'sphere' or 'plane'\n"
 	       "                               can be specified\n"
 	       "                 'material'  - object material (shading), should be 'phong', 'reflect', 'reflect-refract'\n"
 	       "                 'rotate-x'\n"
@@ -2842,6 +2990,9 @@ static void usage(void)
 	       "                Sphere:\n"
 	       "                 'radius' - sphere radius\n"
 	       "                 'pos'    - spehere position\n"
+	       "                Plane:\n"
+	       "                 'normal' - plane normal, accepts float,float,float\n"
+	       "                 'd'      - plane offset, d component of plane equation\n"
 	       "                Mesh:\n"
 	       "                 'file'   - required paremeter, file path of the mesh object\n"
 	       "                 e.g.: '--object type=sphere,radius=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
