@@ -361,6 +361,7 @@ struct object {
 	vec3_t Kd;  /* diffuse weight for each RGB channel */
 	vec3_t Ks;  /* specular weight for each RGB channel */
 	float  n;   /* specular exponent */
+	float  r;   /* reflection coef */
 };
 
 struct sphere {
@@ -905,6 +906,8 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 	if (!hit)
 		return scene->backcolor;
 
+	hit_color = vec3(0.0f, 0.0f, 0.0f);
+
 	/* Evaluate surface properties (P, N, texture coordinates, etc.) */
 	hit_point = v3_add(*orig, v3_muls(*dir, isect.near));
 	object_get_surface_props(isect.hit_object, &hit_point, dir, isect.index,
@@ -965,17 +968,21 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		diffuse = v3_mul(diffuse, isect.hit_object->Kd);
 		specular = v3_mul(specular, isect.hit_object->Ks);
 		hit_color = v3_add(diffuse, specular);
+		if (isect.hit_object->r)
+			/* Object is reflective */
+			goto calculate_reflect;
 		break;
 	}
 	case MATERIAL_REFLECT: {
 		vec3_t reflect_dir;
-
+		vec3_t color;
+calculate_reflect:
 		reflect_dir = reflect(dir, &hit_normal);
 
 		hit_point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
-		hit_color = ray_cast(scene, &hit_point, &reflect_dir, depth + 1);
-		/* Losing energy on reflection, pure average */
-		hit_color = v3_muls(hit_color, 0.8f);
+		color = ray_cast(scene, &hit_point, &reflect_dir, depth + 1);
+		color = v3_muls(color, isect.hit_object->r);
+		hit_color = v3_add(hit_color, color);
 		break;
 	}
 	case MATERIAL_REFLECT_REFRACT: {
@@ -1337,6 +1344,7 @@ enum {
 	OBJECT_KD,
 	OBJECT_KS,
 	OBJECT_N,
+	OBJECT_R,
 	OBJECT_MESH_FILE,
 	OBJECT_MESH_SMOOTH_SHADING,
 	OBJECT_SPHERE_RADIUS,
@@ -1359,6 +1367,7 @@ static char *const object_token[] = {
 	[OBJECT_KD]	       = "Kd",
 	[OBJECT_KS]	       = "Ks",
 	[OBJECT_N]	       = "n",
+	[OBJECT_R]	       = "r",
 	[OBJECT_MESH_FILE]     = "file",
 	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
 	[OBJECT_SPHERE_RADIUS] = "radius",
@@ -1386,6 +1395,7 @@ struct object_params {
 	vec3_t Kd;
 	vec3_t Ks;
 	float  n;
+	float  r;
 	struct {
 		char  file[512];
 		bool  smooth_shading;
@@ -1410,6 +1420,7 @@ static void default_object_params(struct object_params *params)
 	params->Kd = vec3(0.8f, 0.8f, 0.8f);
 	params->Ks = vec3(0.2f, 0.2f, 0.2f);
 	params->n = 10.0f;
+	params->r = 0.0f;
 	params->sphere.radius = 0.5f;
 	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
 	params->plane.normal = vec3(0.0f, 1.0f, 0.0f);
@@ -1430,6 +1441,7 @@ static void object_init(struct object *obj, struct object_ops *ops,
 	obj->Kd = params->Kd;
 	obj->Ks = params->Ks;
 	obj->n = params->n;
+	obj->r = params->r;
 }
 
 static void sphere_set_radius(struct sphere *sphere, float radius)
@@ -1954,6 +1966,9 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			break;
 		case OBJECT_N:
 			fptr = &params->n;
+			break;
+		case OBJECT_R:
+			fptr = &params->r;
 			break;
 		case OBJECT_SPHERE_RADIUS:
 			fptr = &params->sphere.radius;
@@ -2987,6 +3002,7 @@ static void usage(void)
 	       "                 'Kd'     - diffuse weight, accepts float or float,float,float\n"
 	       "                 'Ks'     - specular weight, accepts float or float,float,float\n"
 	       "                 'n'      - specular exponent\n"
+	       "                 'r'      - reflection coefficient, accepts float\n"
 	       "                Sphere:\n"
 	       "                 'radius' - sphere radius\n"
 	       "                 'pos'    - spehere position\n"
