@@ -330,7 +330,14 @@ enum material_type {
 
 enum pattern_type {
 	PATTERN_UNKNOWN,
-	PATTERN_CHECK
+	PATTERN_CHECK,
+	PATTERN_LINE
+};
+
+struct pattern {
+	enum pattern_type type;
+	float scale;
+	float angle;
 };
 
 struct object;
@@ -355,7 +362,7 @@ struct object {
 	struct list_head entry;
 	mat4_t o2w;
 	enum material_type material;
-	enum pattern_type pattern;
+	struct pattern pattern;
 	float  albedo;
 	float  ior; /* index of refraction */
 	vec3_t Kd;  /* diffuse weight for each RGB channel */
@@ -738,17 +745,24 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 static inline float object_pattern(__global struct object *obj,
 				   vec2_t *hit_tex_coords)
 {
-	if (obj->pattern == PATTERN_CHECK) {
-		float angle = deg2rad(0);
-		float co = cos(angle);
-		float si = sin(angle);
-		float s = hit_tex_coords->x * co - hit_tex_coords->y * si;
-		float t = hit_tex_coords->y * co + hit_tex_coords->x * si;
-		float scale = 5;
+	float angle, co, si, s, t, scale;
 
+	if (obj->pattern.type == PATTERN_UNKNOWN)
+		return 1.0f;
+
+	angle = deg2rad(obj->pattern.angle);
+	co = cos(angle);
+	si = sin(angle);
+	s = hit_tex_coords->x * co - hit_tex_coords->y * si;
+	t = hit_tex_coords->y * co + hit_tex_coords->x * si;
+	scale = 1.0f / obj->pattern.scale;
+
+	if (obj->pattern.type == PATTERN_CHECK)
 		return (modulo(s * scale) < 0.5) ^ (modulo(t * scale) < 0.5);
-	}
+	else if (obj->pattern.type == PATTERN_LINE)
+		return (modulo(s * scale) < 0.5);
 
+	/* Hm, unreachable line actually */
 	return 1.0f;
 }
 
@@ -1389,7 +1403,7 @@ struct object_params {
 	mat4_t o2w;
 	enum object_type   type;
 	enum material_type material;
-	enum pattern_type  pattern;
+	struct pattern pattern;
 	float  albedo;
 	float  ior;
 	vec3_t Kd;
@@ -1414,7 +1428,11 @@ static void default_object_params(struct object_params *params)
 {
 	memset(params, 0, sizeof(*params));
 	params->material = MATERIAL_PHONG;
-	params->pattern = PATTERN_UNKNOWN;
+	params->pattern = (struct pattern){
+		.type = PATTERN_UNKNOWN,
+		.scale = 0.5f,
+		.angle = 15.0f
+	};
 	params->albedo = 0.18f;
 	params->ior = 1.3f;
 	params->Kd = vec3(0.8f, 0.8f, 0.8f);
@@ -1948,12 +1966,49 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			break;
 		}
 		case OBJECT_PATTERN: {
-			if (!strcmp(real_value, "check"))
-				params->pattern = PATTERN_CHECK;
+			char *b = strchr(value, '[');
+			char *e = strchr(value, ']');
+			int len = b ? b - value : strlen(value);
+
+			if ((!b) ^ (!e) || b > e) {
+				fprintf(stderr, "Invalid object pattern type '%s', incorrect brackets\n",
+					value);
+				return -EINVAL;
+			}
+			if (!strncmp(value, "check", len))
+				params->pattern.type = PATTERN_CHECK;
+			else if (!strncmp(value, "line", len))
+				params->pattern.type = PATTERN_LINE;
 			else {
 				fprintf(stderr, "Invalid object pattern type '%s'\n",
 					real_value);
 				return -EINVAL;
+			}
+			if (b) {
+				char *scale = strstr(value, "scale=");
+				char *angle = strstr(value, "angle=");
+
+				if (scale) {
+					scale += strlen("scale=");
+					ret = sscanf(scale, "%f", &params->pattern.scale);
+					if (ret != 1) {
+						fprintf(stderr, "Invalid scale for pattern\n");
+						return -EINVAL;
+					}
+				}
+				if (angle) {
+					angle += strlen("angle=");
+					ret = sscanf(angle, "%f", &params->pattern.angle);
+					if (ret != 1) {
+						fprintf(stderr, "Invalid angle for pattern\n");
+						return -EINVAL;
+					}
+				}
+
+				/* To the next param after bracket and skip comma */
+				subopts = e + 1;
+				if (*subopts == ',')
+					subopts += 1;
 			}
 
 			break;
@@ -2996,7 +3051,9 @@ static void usage(void)
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
 	       "                 'scale'     - scale on specified vector, accepts a single float or float,float,float\n"
 	       "                 'translate' - translates on specified offset vector, accepts float,float,float\n"
-	       "                 'pattern'   - apply pattern on object using UV coordinates, should be 'check'\n"
+	       "                 'pattern'   - apply pattern on object using UV coordinates, should be 'check' or 'line'\n"
+	       "                               pattern can be scaled or rotated by providing parameters in square brackets, e.g.:\n"
+	       "                               pattern=check[scale=0.5,angle=10]\n"
 	       "                 'albedo' - albedo\n"
 	       "                 'ior'    - index of refraction\n"
 	       "                 'Kd'     - diffuse weight, accepts float or float,float,float\n"
