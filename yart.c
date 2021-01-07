@@ -116,6 +116,7 @@ struct scene {
 	mat4_t	 c2w;
 	float	 bias;
 	uint32_t ray_depth;
+	uint32_t samples_per_pixel;
 	struct camera cam;
 	__global struct rgba *framebuffer;
 	struct opencl *opencl;
@@ -284,6 +285,23 @@ static inline float deg2rad(float deg)
 static inline float modulo(float f)
 {
     return f - floorf(f);
+}
+
+/**
+ * https://en.wikipedia.org/wiki/Halton_sequence
+ */
+static inline float halton_seq(int i, int b)
+{
+	float r = 0.0f;
+	float v = 1.0f;
+	float binv = 1.0f / b;
+
+	while (i > 0) {
+		v *= binv;
+		r += v * (i % b);
+		i /= b;
+	}
+	return r;
 }
 
 /**
@@ -1046,6 +1064,33 @@ calculate_reflect:
 	return hit_color;
 }
 
+static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
+					const vec3_t *orig, int ix, int iy,
+					float scale, float img_ratio)
+{
+	vec3_t color, dir;
+	float x, y;
+	int n;
+
+	color = vec3(0.0f, 0.0f, 0.0f);
+	for (n = 1; n <= scene->samples_per_pixel; n++) {
+		/* Repeatable jitter */
+		x = ix + halton_seq(n, 3);
+		y = iy + halton_seq(n, 2);
+
+		x = (2.0f * x / scene->width - 1.0f) * img_ratio * scale;
+		y = (1.0f - 2.0f * y / scene->height) * scale;
+
+		dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
+		dir = v3_norm(dir);
+
+		color = v3_add(color, ray_cast(scene, orig, &dir, 1));
+	}
+	color = v3_divs(color, scene->samples_per_pixel);
+
+	return color;
+}
+
 static inline void color_vec_to_rgba32(const vec3_t *color, struct rgba *rgb)
 {
 	*rgb = (struct rgba) {
@@ -1073,13 +1118,7 @@ __kernel void render_opencl(__global struct scene *scene)
 	iy = i / scene->width;
 	ix = i % scene->width;
 
-	x = (2.0f * (ix + 0.5f) / (float)scene->width - 1.0f) * img_ratio * scale;
-	y = (1.0f - 2.0f * (iy + 0.5f) / (float)scene->height) * scale;
-
-	dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
-	dir = v3_norm(dir);
-
-	color = ray_cast(scene, &orig, &dir, 1);
+	color = ray_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
 	color_vec_to_rgba32(&color, &scene->framebuffer[i]);
 }
 
@@ -1321,6 +1360,7 @@ enum {
 
 	OPT_BACKCOLOR,
 	OPT_RAY_DEPTH,
+	OPT_SAMPLES_PER_PIXEL,
 
 	OPT_LIGHT,
 	OPT_OBJECT,
@@ -1338,6 +1378,8 @@ static struct option long_options[] = {
 	{"pos",	      required_argument, 0, OPT_CAM_POS},
 	{"backcolor", required_argument, 0, OPT_BACKCOLOR},
 	{"ray-depth", required_argument, 0, OPT_RAY_DEPTH},
+	{"samples-per-pixel",
+		      required_argument, 0, OPT_SAMPLES_PER_PIXEL},
 	{"light",     required_argument, 0, OPT_LIGHT},
 	{"object",    required_argument, 0, OPT_OBJECT},
 
@@ -2666,7 +2708,8 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 				  uint32_t width, uint32_t height,
 				  vec3_t cam_pos, float cam_pitch,
 				  float cam_yaw, float fov,
-				  vec3_t backcolor, uint32_t ray_depth)
+				  vec3_t backcolor, uint32_t ray_depth,
+				  uint32_t samples_per_pixel)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
@@ -2685,6 +2728,8 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 		.fov	      = fov,
 		.backcolor    = backcolor,
 		.ray_depth    = ray_depth,
+		.samples_per_pixel
+			      = samples_per_pixel,
 		.c2w	      = m4_identity(),
 		.bias	      = 0.0001,
 		.opencl	      = opencl,
@@ -2742,7 +2787,7 @@ static void render_soft(struct scene *scene)
 	float scale, img_ratio;
 	vec3_t orig, color;
 	struct rgba *pix;
-	uint32_t i, j;
+	uint32_t ix, iy;
 
 	scale = tan(deg2rad(scene->fov * 0.5));
 	img_ratio = scene->width / (float)scene->height;
@@ -2751,16 +2796,10 @@ static void render_soft(struct scene *scene)
 	orig = m4_mul_pos(scene->c2w, vec3(0.f, 0.f, 0.f));
 
 	pix = scene->framebuffer;
-	for (j = 0; j < scene->height; ++j) {
-		for (i = 0; i < scene->width; ++i) {
-			float x = (2 * (i + 0.5) / (float)scene->width - 1) *	img_ratio * scale;
-			float y = (1 - 2 * (j + 0.5) / (float)scene->height) * scale;
-			vec3_t dir;
-
-			dir = m4_mul_dir(scene->c2w, vec3(x, y, -1));
-			dir = v3_norm(dir);
-
-			color = ray_cast(scene, &orig, &dir, 1);
+	for (iy = 0; iy < scene->height; ++iy) {
+		for (ix = 0; ix < scene->width; ++ix) {
+			color = ray_cast_for_pixel(scene, &orig, ix, iy,
+						   scale, img_ratio);
 			color_vec_to_rgba32(&color, pix);
 			pix++;
 		}
@@ -3031,6 +3070,8 @@ static void usage(void)
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
 	       "   --backcolor - background color in hex, e.g. for red ff0000\n"
 	       "   --ray-depth - number of ray casting depth, 5 is default\n"
+	       "   --samples-per-pixel\n"
+	       "               - multisample anti-aliasing technique, number of samples (rays) per a pixel, 4 is default\n"
 	       "\n"
 	       "   --light     - add light, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
@@ -3084,6 +3125,7 @@ int main(int argc, char **argv)
 	uint32_t width = 1024;
 	uint32_t height = 768;
 	uint32_t ray_depth = 5;
+	uint32_t samples_per_pixel = 4;
 
 	float cam_pitch = 0.0f;
 	float cam_yaw = 0.0f;
@@ -3165,7 +3207,14 @@ int main(int argc, char **argv)
 			}
 			break;
 		}
-
+		case OPT_SAMPLES_PER_PIXEL: {
+			ret = sscanf(optarg, "%u", &samples_per_pixel);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid --ray-depth, unsigned int.\n");
+				return -EINVAL;
+			}
+			break;
+		}
 		case OPT_LIGHT:
 			/* See lights_create() */
 			break;
@@ -3189,7 +3238,7 @@ int main(int argc, char **argv)
 
 	/* Create scene */
 	scene = scene_create(opencl, one_frame, width, height, cam_pos, cam_pitch,
-			     cam_yaw, fov, backcolor, ray_depth);
+			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel);
 	assert(scene);
 
 	/* Init default objects */
