@@ -108,6 +108,35 @@ struct camera {
 	float  yaw;
 };
 
+enum {
+	RAY_CAST_CALL,
+	RAY_CAST_REFLECT_YIELD,
+	RAY_CAST_RR_REFRACT_YIELD,
+	RAY_CAST_RR_REFLECT_YIELD,
+};
+
+struct ray_cast_state {
+	uint32_t type;
+	union {
+		struct {
+			vec3_t        hit_color;
+			struct object *hit_object;
+		} reflect;
+		struct {
+			float   kr;
+			vec3_t  dir;
+			vec3_t  hit_normal;
+			vec3_t  hit_point;
+			vec3_t  bias;
+			uint8_t outside;
+		} rr_refract;
+		struct {
+			float  kr;
+			vec3_t refract_color;
+		} rr_reflect;
+	};
+};
+
 struct scene {
 	uint32_t width;
 	uint32_t height;
@@ -118,7 +147,8 @@ struct scene {
 	uint32_t ray_depth;
 	uint32_t samples_per_pixel;
 	struct camera cam;
-	__global struct rgba *framebuffer;
+	__global struct rgba           *framebuffer;
+	__global struct ray_cast_state *ray_states;
 	struct opencl *opencl;
 	struct sdl    *sdl;
 
@@ -922,27 +952,48 @@ static float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 	return kr;
 }
 
-static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
-		       const vec3_t *dir, uint32_t depth)
+struct ray_cast_input {
+	__global struct scene *scene;
+	vec3_t orig;
+	vec3_t dir;
+};
+
+struct ray_cast_output {
+	vec3_t color;
+};
+
+static bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
+		       struct ray_cast_state *s)
 {
 	struct intersection isect;
 
-	vec3_t hit_point, hit_normal, hit_color;
+	vec3_t hit_point, hit_normal, hit_color, dir = in->dir;
 	vec2_t hit_tex_coords;
 	bool hit;
 
-	if (depth > scene->ray_depth)
-		return scene->backcolor;
+	/* Continue execution if was yielded */
+	switch (s->type) {
+	case RAY_CAST_REFLECT_YIELD:
+		goto reflect_continue;
+	case RAY_CAST_RR_REFRACT_YIELD:
+		goto rr_refract_continue;
+	case RAY_CAST_RR_REFLECT_YIELD:
+		goto rr_reflect_continue;
+	default:
+		break;
+	}
 
-	hit = trace(scene, orig, dir, &isect, PRIMARY_RAY);
-	if (!hit)
-		return scene->backcolor;
+	hit = trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY);
+	if (!hit) {
+		out->color = in->scene->backcolor;
+		return false;
+	}
 
 	hit_color = vec3(0.0f, 0.0f, 0.0f);
 
 	/* Evaluate surface properties (P, N, texture coordinates, etc.) */
-	hit_point = v3_add(*orig, v3_muls(*dir, isect.near));
-	object_get_surface_props(isect.hit_object, &hit_point, dir, isect.index,
+	hit_point = v3_add(in->orig, v3_muls(dir, isect.near));
+	object_get_surface_props(isect.hit_object, &hit_point, &dir, isect.index,
 				 &isect.uv, &hit_normal, &hit_tex_coords);
 	switch (isect.hit_object->material) {
 	case MATERIAL_PHONG: {
@@ -955,7 +1006,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 
 		diffuse = specular = vec3(0.0f, 0.0f, 0.0f);
 
-		list_for_each_entry(light, &scene->lights, entry) {
+		list_for_each_entry(light, &in->scene->lights, entry) {
 			vec3_t light_dir, light_intensity;
 			vec3_t point, rev_light_dir, R;
 			vec3_t rev_dir, diff, spec;
@@ -967,10 +1018,10 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			light_illuminate(light, &hit_point, &light_dir,
 					 &light_intensity, &near);
 
-			point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
+			point = v3_add(hit_point, v3_muls(hit_normal, in->scene->bias));
 			rev_light_dir = v3_muls(light_dir, -1.0f);
 
-			obstacle = !!trace(scene, &point, &rev_light_dir,
+			obstacle = !!trace(in->scene, &point, &rev_light_dir,
 					   &isect_shadow, SHADOW_RAY);
 			if (obstacle)
 				/* Light is not visible, object is hit, thus shadow */
@@ -990,7 +1041,7 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 			 */
 			R = reflect(&light_dir, &hit_normal);
 
-			rev_dir = v3_muls(*dir, -1.0f);
+			rev_dir = v3_muls(dir, -1.0f);
 
 			p = powf(MAX(0.0f, v3_dot(R, rev_dir)), isect.hit_object->n);
 			spec = v3_muls(light_intensity, p);
@@ -1009,12 +1060,20 @@ static vec3_t ray_cast(__global struct scene *scene, const vec3_t *orig,
 		vec3_t reflect_dir;
 		vec3_t color;
 calculate_reflect:
-		reflect_dir = reflect(dir, &hit_normal);
+		reflect_dir = reflect(&dir, &hit_normal);
 
-		hit_point = v3_add(hit_point, v3_muls(hit_normal, scene->bias));
-		color = ray_cast(scene, &hit_point, &reflect_dir, depth + 1);
-		color = v3_muls(color, isect.hit_object->r);
-		hit_color = v3_add(hit_color, color);
+		hit_point = v3_add(hit_point, v3_muls(hit_normal, in->scene->bias));
+
+		in->orig = hit_point;
+		in->dir = reflect_dir;
+		s->reflect.hit_color = hit_color;
+		s->reflect.hit_object = isect.hit_object;
+		s->type = RAY_CAST_REFLECT_YIELD;
+		return true;
+		/* color = ray_cast(&hit_point, &reflect_dir); */
+reflect_continue:
+		color = v3_muls(out->color, s->reflect.hit_object->r);
+		hit_color = v3_add(s->reflect.hit_color, color);
 		break;
 	}
 	case MATERIAL_REFLECT_REFRACT: {
@@ -1024,44 +1083,124 @@ calculate_reflect:
 		bool outside;
 		float kr;
 
-		kr = fresnel(dir, &hit_normal, isect.hit_object->ior);
-		outside = v3_dot(*dir, hit_normal) < 0.0f;
-		bias = v3_muls(hit_normal, scene->bias);
-
+		kr = fresnel(&dir, &hit_normal, isect.hit_object->ior);
+		outside = v3_dot(dir, hit_normal) < 0.0f;
+		bias = v3_muls(hit_normal, in->scene->bias);
 
 		/* compute refraction if it is not a case of total internal reflection */
 		if (kr < 1.0f) {
 			vec3_t refract_orig, refract_dir;
 
-			refract_dir = refract(dir, &hit_normal, isect.hit_object->ior);
+			refract_dir = refract(&dir, &hit_normal, isect.hit_object->ior);
 			refract_dir = v3_norm(refract_dir);
 
 			refract_orig = outside ?
 				v3_sub(hit_point, bias) :
 				v3_add(hit_point, bias);
 
-			refract_color = ray_cast(scene, &refract_orig, &refract_dir, depth + 1);
-			refract_color = v3_muls(refract_color, 1 - kr);
+			in->orig = refract_orig;
+			in->dir = refract_dir;
+			s->rr_refract.kr = kr;
+			s->rr_refract.hit_normal = hit_normal;
+			s->rr_refract.outside = outside;
+			s->rr_refract.bias = bias;
+			s->rr_refract.hit_point = hit_point;
+			s->rr_refract.dir = dir;
+			s->type = RAY_CAST_RR_REFRACT_YIELD;
+			return true;
+			/* refract_color = ray_cast(&refract_orig, &refract_dir); */
+rr_refract_continue:
+			kr = s->rr_refract.kr;
+			hit_normal = s->rr_refract.hit_normal;
+			outside = s->rr_refract.outside;
+			bias = s->rr_refract.bias;
+			hit_point = s->rr_refract.hit_point;
+			dir = s->rr_refract.dir;
+
+			refract_color = v3_muls(out->color, 1 - kr);
 		}
-		reflect_dir = reflect(dir, &hit_normal);
+		reflect_dir = reflect(&dir, &hit_normal);
 		reflect_dir = v3_norm(reflect_dir);
 
 		reflect_orig = outside ?
 			v3_add(hit_point, bias) :
 			v3_sub(hit_point, bias);
 
-		reflect_color = ray_cast(scene, &reflect_orig, &reflect_dir, depth + 1);
-		reflect_color = v3_muls(reflect_color, kr);
+		in->orig = reflect_orig;
+		in->dir = reflect_dir;
+		s->rr_reflect.refract_color = refract_color;
+		s->rr_reflect.kr = kr;
+		s->type = RAY_CAST_RR_REFLECT_YIELD;
+		return true;
+		/* reflect_color = ray_cast(&reflect_orig, &reflect_dir); */
+rr_reflect_continue:
+		reflect_color = v3_muls(out->color, s->rr_reflect.kr);
 
-		hit_color = v3_add(reflect_color, refract_color);
+		hit_color = v3_add(reflect_color, s->rr_reflect.refract_color);
 		break;
 	}
 	default:
-		hit_color = scene->backcolor;
+		hit_color = in->scene->backcolor;
 		break;
 	}
 
-	return hit_color;
+	out->color = hit_color;
+	return false;
+}
+
+static vec3_t ray_cast(__global struct scene *scene,
+		       __global struct ray_cast_state *ray_states,
+		       const vec3_t *orig, const vec3_t *dir)
+{
+	__global struct ray_cast_state *s = ray_states;
+	struct ray_cast_input in = {
+		.scene = scene,
+		.orig = *orig,
+		.dir = *dir
+	};
+	struct ray_cast_output out = {
+		.color = vec3(0.0f, 0.0f, 0.0f)
+	};
+	int depth;
+
+	/*
+	 * Flatten recursion with a simple loop. Since we can cast rays on
+	 * OpenCL we can't rely on a big stack support on GPU.
+	 */
+	s->type = RAY_CAST_CALL;
+	depth = 0;
+	while (1) {
+		bool yielded = __ray_cast(&in, &out, s);
+		if (yielded) {
+			if (depth + 1 < scene->ray_depth) {
+				/* Take next state and prepare for call */
+				s = &ray_states[++depth];
+
+				/*
+				 * Prepare for next ray cast, input is already set
+				 * by the previous ray cast.
+				 */
+				s->type = RAY_CAST_CALL;
+				continue;
+			}
+			/* Maximum depth is reached */
+			out.color = scene->backcolor;
+
+			/* Pretend call is completed and fall through */
+		}
+		if (!depth)
+			/* Top is reached */
+			return out.color;
+
+		/*
+		 * Take previous state, output is already set
+		 * by the previous ray cast
+		 */
+		s = &ray_states[--depth];
+	}
+
+	/* Unreachable line */
+	return scene->backcolor;
 }
 
 static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
@@ -1074,6 +1213,9 @@ static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
 
 	color = vec3(0.0f, 0.0f, 0.0f);
 	for (n = 1; n <= scene->samples_per_pixel; n++) {
+		__global struct ray_cast_state *ray_states;
+		uint32_t ray_states_off;
+
 		/* Repeatable jitter */
 		x = ix + halton_seq(n, 3);
 		y = iy + halton_seq(n, 2);
@@ -1084,7 +1226,9 @@ static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
 		dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 		dir = v3_norm(dir);
 
-		color = v3_add(color, ray_cast(scene, orig, &dir, 1));
+		ray_states_off = (iy * scene->width + ix) * scene->ray_depth;
+		ray_states = scene->ray_states + ray_states_off;
+		color = v3_add(color, ray_cast(scene, ray_states, orig, &dir));
 	}
 	color = v3_divs(color, scene->samples_per_pixel);
 
@@ -2713,11 +2857,14 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
+	struct ray_cast_state *ray_states;
 	int ret;
 
 	/* Don't mmap by default */
 	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer), 0);
 	assert(framebuffer);
+	ray_states = __buf_allocate(opencl, width * height * ray_depth * sizeof(*ray_states), 0);
+	assert(ray_states);
 
 	scene = buf_allocate(opencl, sizeof(*scene));
 	assert(scene);
@@ -2734,6 +2881,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 		.bias	      = 0.0001,
 		.opencl	      = opencl,
 		.framebuffer  = framebuffer,
+		.ray_states   = ray_states,
 		.objects      = LIST_HEAD_INIT(scene->objects),
 		.lights	      = LIST_HEAD_INIT(scene->lights),
 
@@ -2757,6 +2905,7 @@ static void scene_destroy(struct scene *scene)
 	sdl_deinit(scene);
 	objects_destroy(scene);
 	lights_destroy(scene);
+	buf_destroy(scene->ray_states);
 	buf_destroy(scene->framebuffer);
 	buf_destroy(scene);
 }
@@ -3203,6 +3352,10 @@ int main(int argc, char **argv)
 			ret = sscanf(optarg, "%u", &ray_depth);
 			if (ret != 1) {
 				fprintf(stderr, "Invalid --ray-depth, unsigned int.\n");
+				return -EINVAL;
+			}
+			if (!ray_depth) {
+				fprintf(stderr, "Invalid ray depth value.\n");
 				return -EINVAL;
 			}
 			break;
