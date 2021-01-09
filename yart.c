@@ -1801,7 +1801,7 @@ static int triangle_mesh_load_obj(struct scene *scene,
 				 aiProcess_GenSmoothNormals :
 				 aiProcess_GenNormals));
 	if (!ai_scene) {
-		printf("Can't open %s, aiImportFile failed\n", params->mesh.file);
+		fprintf(stderr, "Can't open %s, aiImportFile failed\n", params->mesh.file);
 		return -EINVAL;
 	}
 
