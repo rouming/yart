@@ -3,7 +3,7 @@ DEFINES = -D_GNU_SOURCE
 CFLAGS = -g -O3 -std=gnu89 -Wall
 
 DEPS = $(shell find . -name '*.h')
-SOURCES:= $(shell find . -name '*.c')
+SOURCES:= $(shell find . -maxdepth 1 -name '*.c')
 OBJ = $(SOURCES:.c=.o)
 
 ifeq ("$(origin V)", "command line")
