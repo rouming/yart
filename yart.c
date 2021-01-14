@@ -118,6 +118,10 @@ struct scene {
 
 	struct list_head objects;
 	struct list_head lights;
+
+	struct {
+		uint64_t rays;
+	} stat;
 };
 
 #ifndef __OPENCL__
@@ -931,6 +935,9 @@ static bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
 	default:
 		break;
 	}
+
+	/* Update stat */
+	atomic64_inc(&in->scene->stat.rays);
 
 	hit = trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY);
 	if (!hit) {
@@ -2915,6 +2922,14 @@ static int scene_map_before_read(struct scene *scene)
 		return ret;
 	}
 
+	/* Map stats */
+	ret = __buf_map(scene->opencl, &scene->stat, sizeof(scene->stat),
+			BUF_MAP_READ);
+	if (ret) {
+		fprintf(stderr, "Failed to map stat for reading\n");
+		buf_unmap(scene->framebuffer);
+		return ret;
+	}
 
 	return 0;
 }
@@ -2923,6 +2938,8 @@ static void scene_unmap_after_read(struct scene *scene)
 {
 	int ret;
 
+	ret = __buf_unmap(scene->opencl, &scene->stat);
+	assert(!ret);
 	ret = buf_unmap(scene->framebuffer);
 	assert(!ret);
 }
@@ -2983,6 +3000,35 @@ static float avg_welford(struct welford_state *s, float new_value)
 	return s->mean;
 }
 
+static const char *scene_average_rays(struct scene *scene)
+{
+	static struct welford_state s;
+	static uint64_t render_ns;
+	static char buf[32];
+	static uint64_t rays;
+	float rps;
+
+	if (render_ns) {
+		rps = 1000000000.0f / (nsecs() - render_ns) *
+			(scene->stat.rays - rays);
+		rps = avg_welford(&s, rps);
+
+		if (rps > 1e6)
+			snprintf(buf, sizeof(buf), "%5.0fM", rps/1e6);
+		else if (rps > 1e3)
+			snprintf(buf, sizeof(buf), "%5.0fK", rps/1e3);
+		else
+			snprintf(buf, sizeof(buf), "%5.0f", rps);
+
+	} else {
+		snprintf(buf, sizeof(buf), "0");
+	}
+	render_ns = nsecs();
+	rays = scene->stat.rays;
+
+	return buf;
+}
+
 static float scene_average_fps(struct scene *scene)
 {
 	static struct welford_state s;
@@ -3013,7 +3059,7 @@ static void draw_scene_status(struct scene *scene)
 	r.x = scene->width - 120;
 	r.y = 0;
 	r.w = 120;
-	r.h = 120;
+	r.h = 140;
 
 	rect_surface = SDL_CreateRGBSurfaceWithFormat(0, 300, 400, 32,
 						      SDL_PIXELFORMAT_RGBA8888);
@@ -3060,10 +3106,17 @@ static void draw_scene_status(struct scene *scene)
 	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
 	SDL_FreeSurface(text_surface);
 
-	snprintf(buf, sizeof(buf), "  FPS %8.0f", scene_average_fps(scene));
+	snprintf(buf, sizeof(buf), "  Rays %s", scene_average_rays(scene));
 	text_surface = TTF_RenderText_Solid(font, buf, color);
 	assert(text_surface);
 	rr = (SDL_Rect){0, 85, text_surface->w, text_surface->h};
+	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
+	SDL_FreeSurface(text_surface);
+
+	snprintf(buf, sizeof(buf), "  FPS %6.0f", scene_average_fps(scene));
+	text_surface = TTF_RenderText_Solid(font, buf, color);
+	assert(text_surface);
+	rr = (SDL_Rect){0, 100, text_surface->w, text_surface->h};
 	SDL_BlitSurface(text_surface, NULL, rect_surface, &rr);
 	SDL_FreeSurface(text_surface);
 
