@@ -37,54 +37,15 @@
 #include <assimp/material.h>
 #include <assimp/postprocess.h>
 #include <assimp/vector3.h>
+#endif /* !__OPENCL__ */
 
-#define __global
-
-#else /* __OPENCL__ */
-
-#define sinf  sin
-#define cosf  cos
-#define tanf  tan
-#define acosf acos
-#define atan2f atan2
-#define fabsf fabs
-#define sqrtf sqrt
-#define powf  pow
-#define floorf floor
-
-struct scene;
-
-typedef unsigned long uint64_t;
-typedef unsigned int  uint32_t;
-typedef int	      int32_t;
-
-typedef unsigned char uint8_t;
-
-#endif /* __OPENCL__ */
-
-#ifndef offsetof
-#define offsetof(t,m) __builtin_offsetof(t, m)
-#endif
-
-#ifndef container_of
-#define container_of(ptr, type, member) ({			\
-	const typeof( ((type*)0)->member )* __mptr = (ptr);	\
-	(type*)( (uintptr_t)__mptr - offsetof(type, member));	\
-})
-#endif
-
+#include "types.h"
 #include "list.h"
 #include "math_3d.h"
-
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define SWAP(a, b) do { typeof(a) temp = a; a = b; b = temp; } while (0)
 
 #define EPSILON	   1e-8
 #define MOVE_SPEED 0.03f
 
-struct opencl;
-struct sdl;
 
 struct rgba {
 	union {
@@ -136,6 +97,9 @@ struct ray_cast_state {
 		} rr_reflect;
 	};
 };
+
+struct opencl;
+struct sdl;
 
 struct scene {
 	uint32_t width;
@@ -300,22 +264,7 @@ static inline unsigned long long nsecs(void)
 	return ((unsigned long long)ts.tv_sec * 1000000000ull) + ts.tv_nsec;
 }
 
-static inline float clamp(float lo, float hi, float v)
-{
-	return MAX(lo, MIN(hi, v));
-}
-
 #endif /* !__OPENCL__ */
-
-static inline float deg2rad(float deg)
-{
-	return deg * M_PI / 180;
-}
-
-static inline float modulo(float f)
-{
-    return f - floorf(f);
-}
 
 /**
  * https://en.wikipedia.org/wiki/Halton_sequence

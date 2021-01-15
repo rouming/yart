@@ -19,16 +19,7 @@
 #ifndef ARRAY_H
 #define ARRAY_H
 
-#ifndef __OPENCL__
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <assert.h>
-#endif
-
+#include "types.h"
 #include "alloc.h"
 
 struct array {
