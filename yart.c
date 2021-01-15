@@ -2955,6 +2955,29 @@ static void render_soft(struct scene *scene)
 	}
 }
 
+static int scene_map_before_read(struct scene *scene)
+{
+	int ret;
+
+	/* Map framebuffer for reading */
+	ret = buf_map(scene->framebuffer, BUF_MAP_READ);
+	if (ret) {
+		fprintf(stderr, "Failed to map framebuffer for reading\n");
+		return ret;
+	}
+
+
+	return 0;
+}
+
+static void scene_unmap_after_read(struct scene *scene)
+{
+	int ret;
+
+	ret = buf_unmap(scene->framebuffer);
+	assert(!ret);
+}
+
 static void one_frame_render(struct scene *scene)
 {
 	unsigned long long ns;
@@ -2973,8 +2996,8 @@ static void one_frame_render(struct scene *scene)
 	out = fopen("yart-out.ppm", "w");
 	assert(out);
 
-	/* Map for reading */
-	ret = buf_map(scene->framebuffer, BUF_MAP_READ);
+	/* Map before read */
+	ret = scene_map_before_read(scene);
 	assert(!ret);
 
 	fprintf(out, "P6\n%d %d\n255\n", scene->width, scene->height);
@@ -2986,8 +3009,7 @@ static void one_frame_render(struct scene *scene)
 	fclose(out);
 
 	/* Unmap */
-	ret = buf_unmap(scene->framebuffer);
-	assert(!ret);
+	scene_unmap_after_read(scene);
 }
 
 /**
@@ -3182,20 +3204,19 @@ static void render(struct scene *scene)
 
 		SDL_RenderClear(sdl->renderer);
 
-		/* Map for reading */
-		ret = buf_map(scene->framebuffer, BUF_MAP_READ);
+		/* Map before read */
+		ret = scene_map_before_read(scene);
 		assert(!ret);
 
 		SDL_UpdateTexture(sdl->screen, NULL, scene->framebuffer,
 				  scene->width * sizeof(*scene->framebuffer));
 
-		/* Unmap */
-		ret = buf_unmap(scene->framebuffer);
-		assert(!ret);
-
 		SDL_RenderCopy(sdl->renderer, sdl->screen, NULL, NULL);
 		draw_scene_status(scene);
 		SDL_RenderPresent(sdl->renderer);
+
+		/* Unmap */
+		scene_unmap_after_read(scene);
 	}
 }
 
