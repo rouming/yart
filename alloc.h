@@ -54,9 +54,6 @@ static inline uint32_t atomic32_inc(uint32_t *p)
 	return __sync_fetch_and_add(p, 1);
 }
 
-#define memcpy_from_global memcpy
-#define memcpy_to_global memcpy
-
 static inline int get_alloc_hint(void)
 {
 	/* Can be any rand, 0 for now */
@@ -115,64 +112,6 @@ static inline __global void *memset(__global void *p, int c, size_t n)
 	while (n--)
 		*xs++ = c;
 	return p;
-}
-
-static inline __global void *memcpy_to_global(__global void *dest,
-					      const void *src, size_t count)
-{
-	size_t i;
-
-	if (count >= 8) {
-		__global long *d = dest;
-		const long *s = src;
-		for (i = 0; i < count/8; i++)
-			*d++ = *s++;
-		count -= i * 8;
-	}
-	if (count >= 4) {
-		__global int *d = dest;
-		const int *s = src;
-		for (i = 0; i < count/4; i++)
-			*d++ = *s++;
-		count -= i * 4;
-	}
-	if (count) {
-		__global char *d = dest;
-		const char *s = src;
-		for (i = 0; i < count; i++)
-			*d++ = *s++;
-	}
-
-	return dest;
-}
-
-static inline void *memcpy_from_global(void *dest, __global const void *src,
-				       size_t count)
-{
-	size_t i;
-
-	if (count >= 8) {
-		long *d = dest;
-		__global const long *s = src;
-		for (i = 0; i < count/8; i++)
-			*d++ = *s++;
-		count -= i * 8;
-	}
-	if (count >= 4) {
-		int *d = dest;
-		__global const int *s = src;
-		for (i = 0; i < count/4; i++)
-			*d++ = *s++;
-		count -= i * 4;
-	}
-	if (count) {
-		char *d = dest;
-		__global const char *s = src;
-		for (i = 0; i < count; i++)
-			*d++ = *s++;
-	}
-
-	return dest;
 }
 
 static inline void memmove(__global void *dest, __global const char *src, size_t n)

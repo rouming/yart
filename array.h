@@ -194,19 +194,7 @@ static inline __global void *array_get(struct array *array, uint32_t i)
 	return (__global char *)node + i * array->elem_size;
 }
 
-static inline int array_set(struct array *array, uint32_t i, void *p)
-{
-	__global void *elem;
-
-	elem = array_get(array, i);
-	if (!elem)
-		return -ENOENT;
-	memcpy_to_global(elem, p, array->elem_size);
-
-	return 0;
-}
-
-static inline int array_push_tail(struct array *array, void *p)
+static inline __global void *array_push_tail(struct array *array)
 {
 	uint32_t i, height, capacity, prior_capacity;
 	__global void *node;
@@ -222,7 +210,7 @@ static inline int array_push_tail(struct array *array, void *p)
 
 		pptr = alloc_chunk(array->a, get_alloc_hint());
 		if (!pptr)
-			return -ENOMEM;
+			return NULL;
 
 		pptr[0] = array->node;
 		array->node = pptr;
@@ -245,35 +233,25 @@ static inline int array_push_tail(struct array *array, void *p)
 			/* Create new child node */
 			node = alloc_chunk(array->a, get_alloc_hint());
 			if (!node)
-				return -ENOMEM;
+				return NULL;
 
 			pptr[i_node] = node;
 		}
 		node = pptr[i_node];
 	}
-	/* Make OpenCL gcc happy */
-	memcpy_to_global((__global char *)node + i * array->elem_size,
-			 p, array->elem_size);
-
 	array->nr_elems++;
 
-	return 0;
+	/* Make OpenCL gcc happy */
+	return (__global char *)node + i * array->elem_size;
 }
 
-static inline int array_pop_head(struct array *array, void *p)
+static inline int array_pop_head(struct array *array)
 {
-	__global void *elem;
 	uint32_t capacity;
 
 	if (!array->nr_elems)
 		return -ENOENT;
 
-	elem = array_get(array, 0);
-	if (!elem)
-		/* Hm, actually unreachable line */
-		return -ENOENT;
-
-	memcpy_from_global(p, elem, array->elem_size);
 	array->nr_elems--;
 	array->i_begin++;
 

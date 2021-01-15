@@ -51,11 +51,12 @@ int main(int argc, char **argv)
 	assert(!ret);
 
 	for (i = 0; i < nr_elems; i++) {
-		ret = array_push_tail(&arr, elems[i]);
-		if (ret == -ENOMEM) {
+		elem = array_push_tail(&arr);
+		if (!elem) {
 			printf("Allocation failed.\n");
 		}
-		assert(!ret);
+		assert(elem);
+		memcpy(elem, elems[i], elem_size);
 	}
 
 	for (i = 0; i < nr_elems; i++) {
@@ -82,7 +83,9 @@ int main(int argc, char **argv)
 	assert(elem);
 
 	for (i = 0; i < nr_elems/2; i++) {
-		ret = array_pop_head(&arr, elem);
+		elem = array_get(&arr, 0);
+		assert(elem);
+		ret = array_pop_head(&arr);
 		assert(!ret);
 
 		assert(!memcmp(elems[i], elem, elem_size));
