@@ -35,9 +35,8 @@ struct allocator {
 
 static inline void init_free_bitmap(__global struct allocator *a)
 {
-	uint32_t bitmap_size = a->size - (a->chunks << a->chunk_shift);
 	uint32_t first_half = a->chunks >> 3;
-	uint32_t last_half = bitmap_size - (round_up(a->chunks, 8) >> 3);
+	uint32_t last_half = a->nbytes_bitmap - (round_up(a->chunks, 8) >> 3);
 	__global uint8_t *bytes = (__global uint8_t *)a->free_bitmap;
 
 	if (first_half)
@@ -65,9 +64,13 @@ static inline int alloc_init(__global struct allocator *a, __global void *buffer
 	chunk_shift = ilog2(chunk_size);
 	chunks = size >> chunk_shift;
 	while (1) {
+		__global void *aligned;
 		uint32_t real_chunks;
 
 		nbytes_bitmap = round_up(chunks, sizeof(*a->free_bitmap) << 3) >> 3;
+		/* Align up on chunk size */
+		aligned = ALIGN_PTR_UP(buffer + nbytes_bitmap, (uintptr_t)chunk_size);
+		nbytes_bitmap = aligned - buffer;
 		real_chunks = (size - nbytes_bitmap) >> chunk_shift;
 		if (chunks != real_chunks && converge < 2) {
 			/* Recalculate once more taking bitmap into account */
@@ -78,9 +81,10 @@ static inline int alloc_init(__global struct allocator *a, __global void *buffer
 		break;
 	}
 
-	a->buffer = buffer;
+	/* Bitmap goes first to keep proper alignment for chunks buffer */
+	a->free_bitmap = buffer;
 	/* Make OpenCL gcc happy */
-	a->free_bitmap = (__global uint64_t*)((__global char *)buffer +	(chunks << chunk_shift));
+	a->buffer = (__global char *)buffer + nbytes_bitmap;
 	a->nbytes_bitmap = nbytes_bitmap;
 	a->nlongs_bitmap = nbytes_bitmap / sizeof(*a->free_bitmap);
 	a->chunk_shift = chunk_shift;
