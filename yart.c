@@ -328,9 +328,7 @@ struct object_ops sphere_ops = {
 	.destroy		= sphere_destroy,
 	.unmap			= sphere_unmap,
 	.intersect		= sphere_intersect,
-	.intersect_type		= SPHERE_INTERSECT,
 	.get_surface_props	= sphere_get_surface_props,
-	.get_surface_props_type = SPHERE_GET_SURFACE_PROPS,
 };
 
 static void plane_destroy(struct object *obj)
@@ -353,9 +351,7 @@ struct object_ops plane_ops = {
 	.destroy		= plane_destroy,
 	.unmap			= plane_unmap,
 	.intersect		= plane_intersect,
-	.intersect_type		= PLANE_INTERSECT,
 	.get_surface_props	= plane_get_surface_props,
-	.get_surface_props_type = PLANE_GET_SURFACE_PROPS,
 };
 
 static void triangle_mesh_destroy(struct object *obj)
@@ -381,10 +377,7 @@ struct object_ops triangle_mesh_ops = {
 	.destroy		= triangle_mesh_destroy,
 	.unmap			= triangle_mesh_unmap,
 	.intersect		= triangle_mesh_intersect,
-	.intersect_type		= TRIANGLE_MESH_INTERSECT,
 	.get_surface_props	= triangle_mesh_get_surface_props,
-	.get_surface_props_type = TRIANGLE_MESH_GET_SURFACE_PROPS,
-
 };
 
 static int no_opencl;
@@ -474,13 +467,6 @@ static char *const object_token[] = {
 	NULL
 };
 
-enum object_type {
-	UNKNOWN_OBJECT = 0,
-	SPHERE_OBJECT,
-	PLANE_OBJECT,
-	MESH_OBJECT,
-};
-
 struct object_params {
 	int    parsed_params_bits;
 	mat4_t o2w;
@@ -533,6 +519,7 @@ static void object_init(struct object *obj, struct object_ops *ops,
 			struct object_params *params)
 {
 	INIT_LIST_HEAD(&obj->entry);
+	obj->type = params->type;
 	obj->ops = *ops;
 	obj->o2w = params->o2w;
 	obj->material = params->material;
@@ -1327,10 +1314,12 @@ error:
 	return ret;
 }
 
-static void light_init(struct light *light, struct light_ops *ops,
-		       const vec3_t *color, float intensity)
+static void light_init(struct light *light, enum light_type type,
+		       struct light_ops *ops, const vec3_t *color,
+		       float intensity)
 {
 	INIT_LIST_HEAD(&light->entry);
+	light->type = type;
 	light->ops = *ops;
 	light->color = *color;
 	light->intensity = intensity;
@@ -1356,7 +1345,6 @@ struct light_ops distant_light_ops = {
 	.destroy	 = distant_light_destroy,
 	.unmap		 = distant_light_unmap,
 	.illuminate	 = distant_light_illuminate,
-	.illuminate_type = DISTANT_LIGHT_ILLUMINATE,
 };
 
 static void distant_light_set_dir(struct distant_light *dlight, vec3_t dir)
@@ -1367,7 +1355,8 @@ static void distant_light_set_dir(struct distant_light *dlight, vec3_t dir)
 static void distant_light_init(struct distant_light *dlight, const vec3_t *color,
 			       float intensity)
 {
-	light_init(&dlight->light, &distant_light_ops, color, intensity);
+	light_init(&dlight->light, DISTANT_LIGHT, &distant_light_ops,
+		   color, intensity);
 	distant_light_set_dir(dlight, vec3(0.0f, 0.0f, -1.0f));
 }
 
@@ -1391,13 +1380,13 @@ struct light_ops point_light_ops = {
 	.destroy	 = point_light_destroy,
 	.unmap		 = point_light_unmap,
 	.illuminate	 = point_light_illuminate,
-	.illuminate_type = POINT_LIGHT_ILLUMINATE,
 };
 
 static void point_light_init(struct point_light *plight, const vec3_t *color,
 			     float intensity)
 {
-	light_init(&plight->light, &point_light_ops, color, intensity);
+	light_init(&plight->light, POINT_LIGHT, &point_light_ops,
+		   color, intensity);
 	plight->pos = vec3(0.0f, 1.0f, 0.0f);
 }
 
@@ -1415,12 +1404,6 @@ static char *const light_token[] = {
 	[LIGHT_INTENSITY] = "intensity",
 	[LIGHT_DIR]	  = "dir",
 	[LIGHT_POS]	  = "pos",
-};
-
-enum {
-	UNKNOWN_LIGHT = 0,
-	DISTANT_LIGHT,
-	POINT_LIGHT,
 };
 
 static int parse_light_type_param(char *subopts)

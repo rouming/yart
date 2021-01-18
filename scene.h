@@ -126,20 +126,6 @@ static inline bool solve_quadratic(float a, float b, float c, float *x0, float *
 	return true;
 }
 
-enum ops_type {
-	SPHERE_INTERSECT,
-	SPHERE_GET_SURFACE_PROPS,
-
-	PLANE_INTERSECT,
-	PLANE_GET_SURFACE_PROPS,
-
-	TRIANGLE_MESH_INTERSECT,
-	TRIANGLE_MESH_GET_SURFACE_PROPS,
-
-	DISTANT_LIGHT_ILLUMINATE,
-	POINT_LIGHT_ILLUMINATE,
-};
-
 enum material_type {
 	MATERIAL_PHONG,
 	MATERIAL_REFLECT,
@@ -169,13 +155,17 @@ struct object_ops {
 				  const vec3_t *dir, uint32_t index, const vec2_t *uv,
 				  vec3_t *hit_normal,
 				  vec2_t *hit_tex_coords);
+};
 
-	/* Required for OpenCL "virtual" calls */
-	enum ops_type intersect_type;
-	enum ops_type get_surface_props_type;
+enum object_type {
+	UNKNOWN_OBJECT = 0,
+	SPHERE_OBJECT,
+	PLANE_OBJECT,
+	MESH_OBJECT,
 };
 
 struct object {
+	uint32_t          type;  /* object type */
 	struct object_ops ops;	 /* because of opencl can't be a pointer */
 	struct list_head entry;
 	mat4_t o2w;
@@ -324,6 +314,9 @@ struct triangle_mesh {
 	__global vec2_t	  *sts;		  /* texture coordinates */
 };
 
+/**
+ * Möller-Trumbore triangle intersection
+ */
 static inline bool
 triangle_intersect(const vec3_t *orig, const vec3_t *dir,
 		   __global const vec3_t *v0,
@@ -454,12 +447,16 @@ struct light_ops {
 	int (*unmap)(struct light *light);
 	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
+};
 
-	/* Required for OpenCL "virtual" calls */
-	enum ops_type illuminate_type;
+enum light_type {
+	UNKNOWN_LIGHT = 0,
+	DISTANT_LIGHT,
+	POINT_LIGHT,
 };
 
 struct light {
+	uint32_t         type;  /* light type */
 	struct light_ops ops;	/* because of opencl can't a pointer */
 	struct list_head entry;
 	vec3_t color;
@@ -516,15 +513,16 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 	return obj->ops.intersect(obj, orig, dir, near, index, uv);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
-	switch (obj->ops.intersect_type) {
-	case SPHERE_INTERSECT:
+	switch (obj->type) {
+	case SPHERE_OBJECT:
 		return sphere_intersect(obj, orig, dir, near, index, uv);
-	case PLANE_INTERSECT:
+	case PLANE_OBJECT:
 		return plane_intersect(obj, orig, dir, near, index, uv);
-	case TRIANGLE_MESH_INTERSECT:
+	case MESH_OBJECT:
 		return triangle_mesh_intersect(obj, orig, dir, near, index, uv);
 	default:
 		/* Hm .. */
+		printf("%s: unknown object %d\n", __func__, obj->type);
 		return false;
 	}
 #endif
@@ -540,21 +538,22 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 				   uv, hit_normal, hit_tex_coords);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
-	switch (obj->ops.get_surface_props_type) {
-	case SPHERE_GET_SURFACE_PROPS:
+	switch (obj->type) {
+	case SPHERE_OBJECT:
 		sphere_get_surface_props(obj, hit_point, dir, index,
 					 uv, hit_normal, hit_tex_coords);
 		return;
-	case PLANE_GET_SURFACE_PROPS:
+	case PLANE_OBJECT:
 		plane_get_surface_props(obj, hit_point, dir, index,
 					uv, hit_normal, hit_tex_coords);
 		return;
-	case TRIANGLE_MESH_GET_SURFACE_PROPS:
+	case MESH_OBJECT:
 		triangle_mesh_get_surface_props(obj, hit_point, dir, index,
 						uv, hit_normal, hit_tex_coords);
 		return;
 	default:
 		/* Hm .. */
+		printf("%s: unknown object %d\n", __func__, obj->type);
 		return;
 	}
 #endif
@@ -592,15 +591,16 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 	light->ops.illuminate(light, orig, dir, intensity, distance);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
-	switch (light->ops.illuminate_type) {
-	case DISTANT_LIGHT_ILLUMINATE:
+	switch (light->type) {
+	case DISTANT_LIGHT:
 		distant_light_illuminate(light, orig, dir, intensity, distance);
 		return;
-	case POINT_LIGHT_ILLUMINATE:
+	case POINT_LIGHT:
 		point_light_illuminate(light, orig, dir, intensity, distance);
 		return;
 	default:
 		/* Hm .. */
+		printf("%s: unknown light %d\n", __func__, light->type);
 		return;
 	}
 #endif

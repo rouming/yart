@@ -163,62 +163,16 @@ static inline __global void *memset(__global void *p, int c, size_t n)
 	return p;
 }
 
-static inline __global void *memcpy_to_global(__global void *dest,
-					      const void *src, size_t count)
+static inline int memcmp(__global const void *cs, __global const void *ct,
+			 size_t count)
 {
-	size_t i;
+	__global const unsigned char *su1, *su2;
+	int res = 0;
 
-	if (count >= 8) {
-		__global long *d = dest;
-		const long *s = src;
-		for (i = 0; i < count/8; i++)
-			*d++ = *s++;
-		count -= i * 8;
-	}
-	if (count >= 4) {
-		__global int *d = dest;
-		const int *s = src;
-		for (i = 0; i < count/4; i++)
-			*d++ = *s++;
-		count -= i * 4;
-	}
-	if (count) {
-		__global char *d = dest;
-		const char *s = src;
-		for (i = 0; i < count; i++)
-			*d++ = *s++;
-	}
-
-	return dest;
-}
-
-static inline void *memcpy_from_global(void *dest, __global const void *src,
-				       size_t count)
-{
-	size_t i;
-
-	if (count >= 8) {
-		long *d = dest;
-		__global const long *s = src;
-		for (i = 0; i < count/8; i++)
-			*d++ = *s++;
-		count -= i * 8;
-	}
-	if (count >= 4) {
-		int *d = dest;
-		__global const int *s = src;
-		for (i = 0; i < count/4; i++)
-			*d++ = *s++;
-		count -= i * 4;
-	}
-	if (count) {
-		char *d = dest;
-		__global const char *s = src;
-		for (i = 0; i < count; i++)
-			*d++ = *s++;
-	}
-
-	return dest;
+	for (su1 = cs, su2 = ct; 0 < count; ++su1, ++su2, count--)
+		if ((res = *su1 - *su2) != 0)
+			break;
+	return res;
 }
 
 static inline void memmove(__global void *dest, __global const char *src, size_t n)
