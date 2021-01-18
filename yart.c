@@ -38,6 +38,7 @@
 #include <assimp/vector3.h>
 
 #include "scene.h"
+#include "render-opencl.h"
 
 #define MOVE_SPEED 0.03f
 
@@ -196,22 +197,8 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	cl_kernel kernel;
 	cl_int ret;
 
-	size_t size, read;
-	char *source;
-	FILE *fp;
-
-	fp = fopen("./render.cl", "r");
-	assert(fp);
-
-	fseek(fp, 0, SEEK_END);
-	size = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-
-	source = malloc(size);
-	assert(source);
-
-	read = fread(source, 1, size, fp);
-	assert(read == size);
+	const char *source = (char *)render_opencl_preprocessed_cl;
+	size_t size = render_opencl_preprocessed_cl_len;
 
 	/* Get platform and device information */
 	ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
@@ -239,11 +226,9 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	assert(!ret);
 
 	/* Create a program from the kernel source */
-	program = clCreateProgramWithSource(context, 1, (const char **)&source,
-					    &size, &ret);
+	size = render_opencl_preprocessed_cl_len;
+	program = clCreateProgramWithSource(context, 1, &source, &size, &ret);
 	assert(!ret);
-
-	free(source);
 
 	/* Build the program */
 	ret = clBuildProgram(program, 1, &device_id, "-cl-std=CL2.0 -Werror -D__OPENCL__",

@@ -1,4 +1,6 @@
 yart
+render-opencl-preprocessed.cl
+render-opencl.h
 cscope.*
 *.o
 *~
