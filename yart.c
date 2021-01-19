@@ -38,6 +38,7 @@
 #include <assimp/vector3.h>
 
 #include "scene.h"
+#include "buf.h"
 #include "render-opencl.h"
 
 #define MOVE_SPEED 0.03f
@@ -54,12 +55,6 @@ struct sdl {
 	SDL_Window   *window;
 	SDL_Renderer *renderer;
 	SDL_Texture  *screen;
-};
-
-enum {
-	BUF_MAP_WRITE = 1<<0,
-	BUF_MAP_READ  = 1<<1,
-	BUF_ZERO      = 1<<2,
 };
 
 struct buf_region {
@@ -113,12 +108,12 @@ static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
 	return ptr;
 }
 
-static void *buf_allocate(struct opencl *opencl, size_t sz)
+void *buf_allocate(struct opencl *opencl, size_t sz)
 {
 	return __buf_allocate(opencl, sz, BUF_ZERO | BUF_MAP_WRITE);
 }
 
-static void buf_destroy(void *ptr)
+void buf_destroy(void *ptr)
 {
 	struct buf_region *reg;
 
@@ -154,7 +149,7 @@ static int __buf_map(struct opencl *opencl, void *ptr,
 			       0, NULL, NULL);
 }
 
-static int buf_map(void *ptr, uint32_t flags)
+int buf_map(void *ptr, uint32_t flags)
 {
 	struct buf_region *reg = (ptr - 16);
 
@@ -169,7 +164,7 @@ static int __buf_unmap(struct opencl *opencl, void *ptr)
 	return clEnqueueSVMUnmap(opencl->queue, ptr, 0, NULL, NULL);
 }
 
-static int buf_unmap(void *ptr)
+int buf_unmap(void *ptr)
 {
 	struct buf_region *reg = (ptr - 16);
 
