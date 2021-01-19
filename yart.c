@@ -794,6 +794,7 @@ static int triangle_mesh_load_geo(struct scene *scene,
 	}
 	triangle_mesh_init_geo(scene->opencl, params, mesh, num_faces,
 			       face_index, verts_index, verts, normals, sts);
+	scene->num_verts += mesh->num_verts;
 	list_add_tail(&mesh->obj.entry, &scene->objects);
 	ret = 0;
 
@@ -904,6 +905,7 @@ static int triangle_mesh_load_obj(struct scene *scene,
 		}
 		triangle_mesh_init(scene->opencl, params, mesh, num_verts,
 				   flat_verts, flat_norms, flat_sts);
+		scene->num_verts += mesh->num_verts;
 		list_add_tail(&mesh->obj.entry, &objects);
 
 	}

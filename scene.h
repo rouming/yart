@@ -42,6 +42,7 @@ struct scene {
 	float	 bias;
 	uint32_t ray_depth;
 	uint32_t samples_per_pixel;
+	uint64_t num_verts;
 	struct camera cam;
 	__global struct rgba           *framebuffer;
 	__global struct ray_cast_state *ray_states;
