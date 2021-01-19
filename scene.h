@@ -354,9 +354,34 @@ triangle_intersect(const vec3_t *orig, const vec3_t *dir,
 	return (*t > 0);
 }
 
-static inline bool triangle_mesh_intersect(__global struct object *obj, const vec3_t *orig,
-					   const vec3_t *dir, float *near,
-					   uint32_t *index, vec2_t *uv)
+static inline bool __triangle_mesh_intersect(__global const struct triangle_mesh *mesh,
+					     const vec3_t *orig, const vec3_t *dir,
+					     float *near, uint32_t i, vec2_t *uv)
+{
+	__global const vec3_t *vertices = mesh->vertices;
+	__global const vec3_t *v0 = &vertices[i + 0];
+	__global const vec3_t *v1 = &vertices[i + 1];
+	__global const vec3_t *v2 = &vertices[i + 2];
+
+	float t = INFINITY, u, v;
+
+	if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
+	    t < *near) {
+		*near = t;
+		if (uv) {
+			uv->x = u;
+			uv->y = v;
+		}
+		return true;
+	}
+
+	return false;
+}
+
+
+static inline bool triangle_mesh_intersect(__global struct object *obj,
+					   const vec3_t *orig, const vec3_t *dir,
+					   float *near, uint32_t *index, vec2_t *uv)
 {
 	__global struct triangle_mesh *mesh;
 
@@ -367,17 +392,7 @@ static inline bool triangle_mesh_intersect(__global struct object *obj, const ve
 
 	isect = false;
 	for (i = 0; i < mesh->num_verts; i += 3) {
-		__global const vec3_t *vertices = mesh->vertices;
-		__global const vec3_t *v0 = &vertices[i + 0];
-		__global const vec3_t *v1 = &vertices[i + 1];
-		__global const vec3_t *v2 = &vertices[i + 2];
-		float t = INFINITY, u, v;
-
-		if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
-		    t < *near) {
-			*near = t;
-			uv->x = u;
-			uv->y = v;
+		if (__triangle_mesh_intersect(mesh, orig, dir, near, i, uv)) {
 			*index = i / 3;
 			isect = true;
 		}
