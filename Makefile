@@ -6,7 +6,7 @@ PREP = ./render-opencl-preprocessed.cl
 GEN  = ./render-opencl.h
 # Exclude $GEN header
 DEPS = $(filter-out $(GEN), $(shell find . -name '*.h'))
-SOURCES:= yart.c
+SOURCES:= yart.c bvh.c
 OBJ = $(SOURCES:.c=.o)
 
 ifeq ("$(origin V)", "command line")

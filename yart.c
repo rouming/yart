@@ -790,7 +790,7 @@ static int triangle_mesh_load_geo(struct scene *scene,
 	triangle_mesh_init_geo(scene->opencl, params, mesh, num_faces,
 			       face_index, verts_index, verts, normals, sts);
 	scene->num_verts += mesh->num_verts;
-	list_add_tail(&mesh->obj.entry, &scene->objects);
+	list_add_tail(&mesh->obj.entry, &scene->mesh_objects);
 	ret = 0;
 
 error:
@@ -904,7 +904,7 @@ static int triangle_mesh_load_obj(struct scene *scene,
 		list_add_tail(&mesh->obj.entry, &objects);
 
 	}
-	list_splice_tail(&objects, &scene->objects);
+	list_splice_tail(&objects, &scene->mesh_objects);
 	ret = 0;
 out:
 	aiReleaseImport(ai_scene);
@@ -1226,7 +1226,9 @@ static void objects_destroy(struct scene *scene)
 {
 	struct object *obj, *tmp;
 
-	list_for_each_entry_safe(obj, tmp, &scene->objects, entry)
+	list_for_each_entry_safe(obj, tmp, &scene->mesh_objects, entry)
+		object_destroy(obj);
+	list_for_each_entry_safe(obj, tmp, &scene->notmesh_objects, entry)
 		object_destroy(obj);
 }
 
@@ -1241,7 +1243,7 @@ static int objects_create_from_params(struct scene *scene,
 		if (!sphere)
 			return -ENOMEM;
 		sphere_init(sphere, params);
-		list_add_tail(&sphere->obj.entry, &scene->objects);
+		list_add_tail(&sphere->obj.entry, &scene->notmesh_objects);
 		return 0;
 	}
 	case PLANE_OBJECT: {
@@ -1251,7 +1253,7 @@ static int objects_create_from_params(struct scene *scene,
 		if (!plane)
 			return -ENOMEM;
 		plane_init(plane, params);
-		list_add_tail(&plane->obj.entry, &scene->objects);
+		list_add_tail(&plane->obj.entry, &scene->notmesh_objects);
 		return 0;
 	}
 	case MESH_OBJECT: {
@@ -1735,6 +1737,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 	struct scene *scene;
 	struct rgba *framebuffer;
 	struct ray_cast_state *ray_states;
+	void *heap;
 	int ret;
 
 	/* Don't mmap by default */
@@ -1743,6 +1746,8 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 	ray_states = __buf_allocate(opencl, width * height * ray_depth * sizeof(*ray_states), 0);
 	assert(ray_states);
 
+	heap = buf_allocate(opencl, HEAP_SIZE);
+	assert(heap);
 	scene = buf_allocate(opencl, sizeof(*scene));
 	assert(scene);
 
@@ -1759,7 +1764,10 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 		.opencl	      = opencl,
 		.framebuffer  = framebuffer,
 		.ray_states   = ray_states,
-		.objects      = LIST_HEAD_INIT(scene->objects),
+		.heap         = heap,
+		.notmesh_objects
+			      = LIST_HEAD_INIT(scene->notmesh_objects),
+		.mesh_objects = LIST_HEAD_INIT(scene->mesh_objects),
 		.lights	      = LIST_HEAD_INIT(scene->lights),
 
 		.cam = {
@@ -1768,6 +1776,9 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 	};
 	camera_set_angles(scene, cam_pitch, cam_yaw);
 	camera_update_c2w(scene);
+	ret = alloc_init(&scene->alloc, heap, HEAP_SIZE, CHUNK_SIZE, NO_FLAGS);
+	assert(!ret);
+	bvhtree_init(&scene->bvhtree);
 
 	if (!no_sdl) {
 		ret = sdl_init(scene);
@@ -1779,9 +1790,15 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 
 static void scene_destroy(struct scene *scene)
 {
+	int ret;
+
 	sdl_deinit(scene);
+	bvhtree_deinit(&scene->bvhtree);
+	ret = alloc_deinit(&scene->alloc);
+	assert(!ret);
 	objects_destroy(scene);
 	lights_destroy(scene);
+	buf_destroy(scene->heap);
 	buf_destroy(scene->ray_states);
 	buf_destroy(scene->framebuffer);
 	buf_destroy(scene);
@@ -1793,17 +1810,39 @@ static int scene_finish(struct scene *scene)
 	struct light *light;
 	int ret;
 
-	list_for_each_entry(object, &scene->objects, entry) {
+	/* Scene is ready, thus build BVH */
+	ret = bvhtree_build(&scene->bvhtree, scene);
+	if (ret) {
+		fprintf(stderr, "%s: bvhtree_build() failed %d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	/* Unmap mesh objects before render */
+	list_for_each_entry(object, &scene->mesh_objects, entry) {
 		ret = object->ops.unmap(object);
 		if (ret)
 			return ret;
 	}
 
+	/* Unmap other objects before render */
+	list_for_each_entry(object, &scene->notmesh_objects, entry) {
+		ret = object->ops.unmap(object);
+		if (ret)
+			return ret;
+	}
+
+	/* Unmap lights before render */
 	list_for_each_entry(light, &scene->lights, entry) {
 		ret = light->ops.unmap(light);
 		if (ret)
 			return ret;
 	}
+
+	/* Unmap heap before render */
+	ret = buf_unmap(scene->heap);
+	if (ret)
+		return ret;
 
 	return buf_unmap(scene);
 }
@@ -1852,6 +1891,25 @@ static int scene_map_before_read(struct scene *scene)
 		return ret;
 	}
 
+	/* Map allocator and bitmap */
+	ret = __buf_map(scene->opencl, &scene->alloc, sizeof(scene->alloc),
+			BUF_MAP_READ);
+	if (ret) {
+		fprintf(stderr, "Failed to map alloctor struct for reading\n");
+		buf_unmap(scene->framebuffer);
+		__buf_unmap(scene->opencl, &scene->stat);
+		return ret;
+	}
+	ret = __buf_map(scene->opencl, scene->alloc.free_bitmap,
+			scene->alloc.nbytes_bitmap, BUF_MAP_READ);
+	if (ret) {
+		fprintf(stderr, "Failed to map alloctor struct for reading\n");
+		buf_unmap(scene->framebuffer);
+		__buf_unmap(scene->opencl, &scene->stat);
+		__buf_unmap(scene->opencl, &scene->alloc);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -1859,6 +1917,10 @@ static void scene_unmap_after_read(struct scene *scene)
 {
 	int ret;
 
+	ret = __buf_unmap(scene->opencl, &scene->alloc);
+	assert(!ret);
+	ret = __buf_unmap(scene->opencl, scene->alloc.free_bitmap);
+	assert(!ret);
 	ret = __buf_unmap(scene->opencl, &scene->stat);
 	assert(!ret);
 	ret = buf_unmap(scene->framebuffer);

@@ -203,10 +203,8 @@ static inline bool __triangle_mesh_intersect(__global const struct triangle_mesh
 	if (triangle_intersect(orig, dir, v0, v1, v2, &t, &u, &v) &&
 	    t < *near) {
 		*near = t;
-		if (uv) {
-			uv->x = u;
-			uv->y = v;
-		}
+		uv->x = u;
+		uv->y = v;
 		return true;
 	}
 
@@ -425,6 +423,106 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 #endif
 }
 
+static inline bool bvhtree_intersect(__global const struct bvhtree *bvh,
+				     const vec3_t *orig, const vec3_t *dir,
+				     struct intersection *isect,
+				     enum ray_type ray_type)
+{
+	__global const struct octant *octant;
+
+	struct octant_queue queue;
+
+	float numerators[NR_PLANE_NORMALS];
+	float denominators[NR_PLANE_NORMALS];
+	float t_near, t_far, t_hit, t_octant;
+	int i, ret;
+	vec2_t uv;
+
+	/* Precompute dot products for plane-set normals, see equation above */
+	for (i = 0; i < NR_PLANE_NORMALS; i++) {
+		numerators[i]   = v3_dot(*orig, plane_set_normals[i]);
+		denominators[i] = v3_dot(*dir,  plane_set_normals[i]);
+	}
+
+	t_near = 0.0f;
+	t_far  = INFINITY;
+
+	if (!extent_intersect(&bvh->root.extent, numerators, denominators,
+			      &t_near, &t_far)
+	    /* XXX */
+	    || t_far < 0.0f) {
+		return false;
+	}
+
+	ret = octant_queue_init(&queue, bvh->alloc);
+	if (ret) {
+		assert(0);
+		return false;
+	}
+
+	octant = &bvh->root;
+	t_octant = 0.0f;
+	t_hit = t_far;
+
+	do {
+		if (t_octant >= t_hit)
+			break;
+
+		if (octant_is_leaf(octant)) {
+			__global struct extent_leaf *leaf;
+
+			list_for_each_entry(leaf, &octant->leaves, entry) {
+				if (ray_type == SHADOW_RAY &&
+				    leaf->mesh->obj.material == MATERIAL_REFLECT_REFRACT)
+					/* No shadow for objects which reflect-refract */
+					continue;
+
+				if (__triangle_mesh_intersect(leaf->mesh, orig, dir, &t_hit,
+							      leaf->index, &uv)) {
+					isect->hit_object = &leaf->mesh->obj;
+					isect->near = t_hit;
+					/* XXX: sometimes triangles, sometimes vertices */
+					isect->index = leaf->index / 3;
+					isect->uv = uv;
+				}
+			}
+			continue;
+		}
+
+		/* Not a leaf octant, continue descent to children */
+		for (i = 0; i < ARRAY_SIZE(octant->octants); i++) {
+			float t_near_child, t_far_child;
+			__global struct octant *child;
+
+			if (!(child = octant->octants[i]))
+				continue;
+
+			t_near_child = 0.0f;
+			t_far_child  = t_far;
+
+			if (extent_intersect(&child->extent, numerators, denominators,
+					     &t_near_child, &t_far_child)) {
+				/* XXX */
+				float t = (t_near_child < 0.0f && t_far_child >= 0.0f) ?
+					t_far_child : t_near_child;
+
+				ret = octant_queue_insert(&queue, child, t);
+				if (ret) {
+					isect->hit_object = NULL;
+					assert(0);
+					goto out;
+				}
+			}
+		}
+	} while ((octant = octant_queue_pop_first(&queue, &t_octant)));
+
+out:
+	ret = octant_queue_deinit(&queue);
+	assert(!ret);
+
+	return !!isect->hit_object;
+}
+
 static inline bool
 ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 	  struct intersection *isect, enum ray_type ray_type)
@@ -434,17 +532,22 @@ ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 	isect->hit_object = NULL;
 	isect->near = INFINITY;
 
-	list_for_each_entry(obj, &scene->objects, entry) {
+	/* Trace meshes */
+	bvhtree_intersect(&scene->bvhtree, orig, dir, isect, ray_type);
+
+	/* Trace other objects */
+	list_for_each_entry(obj, &scene->notmesh_objects, entry) {
 		float near = INFINITY;
 		uint32_t index = 0;
 		vec2_t uv;
 
+		if (ray_type == SHADOW_RAY &&
+		    obj->material == MATERIAL_REFLECT_REFRACT)
+			/* No shadow for objects which reflect-refract */
+			continue;
+
 		if (object_intersect(obj, orig, dir, &near, &index, &uv) &&
 		    near < isect->near) {
-			if (ray_type == SHADOW_RAY &&
-			    obj->material == MATERIAL_REFLECT_REFRACT)
-				/* No shadow for objects which reflect-refract */
-				continue;
 			isect->hit_object = obj;
 			isect->near = near;
 			isect->index = index;

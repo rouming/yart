@@ -137,7 +137,7 @@ static inline int memcache_free(struct memcache *mc, __global void *p)
 		/* Invalid? */
 		return -EINVAL;
 
-	buf = (__global void *)chunk->free_bitmap + mc->nbytes_bitmap;
+	buf = (__global char *)chunk->free_bitmap + mc->nbytes_bitmap;
 	if (p < buf)
 		/* Invalid? */
 		return -EINVAL;
@@ -149,7 +149,7 @@ static inline int memcache_free(struct memcache *mc, __global void *p)
 
 	ch = off / mc->cache_size;
 
-	shift = 32;
+	shift = 5; /* log2(sizeof(uint32_t)) + 3 */
 	bit = ch & ((1<<shift)-1);
 	i = ch >> shift;
 

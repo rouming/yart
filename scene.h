@@ -5,6 +5,7 @@
 #include "math_3d.h"
 #include "list.h"
 #include "alloc.h"
+#include "bvh.h"
 
 #define EPSILON	   1e-5
 
@@ -33,6 +34,11 @@ struct camera {
 struct opencl;
 struct sdl;
 
+enum {
+	HEAP_SIZE  = 1<<30,
+	CHUNK_SIZE = 1<<10,
+};
+
 struct scene {
 	uint32_t width;
 	uint32_t height;
@@ -48,10 +54,12 @@ struct scene {
 	__global struct ray_cast_state *ray_states;
 	__global void    *heap;
 	struct allocator alloc;
+	struct bvhtree bvhtree;
 	struct opencl *opencl;
 	struct sdl    *sdl;
 
-	struct list_head objects;
+	struct list_head mesh_objects;
+	struct list_head notmesh_objects;
 	struct list_head lights;
 
 	struct {
