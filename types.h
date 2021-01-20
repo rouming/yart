@@ -72,10 +72,8 @@ static inline uint32_t fls_bit(uint64_t x)
 	return x ? sizeof(x) * 8 - __builtin_clzl(x) : 0;
 }
 
-static inline uint32_t ffs_bit(uint64_t x)
-{
-	return ffsl(x);
-}
+#define ffs_bit(x)	\
+	(sizeof(x) == 8 ? ffsl(x) : ffs(x))
 
 static inline uint64_t atomic64_cmpxchg(uint64_t *p, uint64_t old, uint64_t new)
 {
@@ -119,10 +117,8 @@ static inline int get_alloc_hint(void)
 #define ENOMEM 12
 #define EINVAL 22
 
-static inline uint32_t ffs_bit(uint64_t x)
-{
-	return x ? popcount(x ^ ~-x) : 0;
-}
+#define ffs_bit(x) \
+	((x) ? popcount((x) ^ ~-(x)) : 0)
 
 static inline uint32_t fls_bit(uint64_t x)
 {

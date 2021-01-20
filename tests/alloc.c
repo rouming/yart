@@ -17,8 +17,10 @@ int main(int argc, char **argv)
 	void *chunk, *p;
 	int i, ret;
 
-	if (argc != 3)
+	if (argc != 3) {
+		printf("Usage: <size> <chunk_size>\n");
 		return -1;
+	}
 
 	size = atoi(argv[1]);
 	chunk_size = atoi(argv[2]);

@@ -40,9 +40,9 @@ static inline void init_free_bitmap(__global struct allocator *a)
 	__global uint8_t *bytes = (__global uint8_t *)a->free_bitmap;
 
 	if (first_half)
-		memset(a->free_bitmap, 0xff, first_half);
+		memset(bytes, 0xff, first_half);
 	if (a->chunks & 7)
-		bytes[first_half] = (1<<(a->chunks % 8)) - 1;
+		bytes[first_half] = (1<<(a->chunks & 7)) - 1;
 	if (last_half)
 		memset(bytes + first_half + 1, 0, last_half);
 }
@@ -113,7 +113,7 @@ static inline int alloc_deinit(__global struct allocator *a)
 	    (bytes[0] != 0xff || memcmp(bytes, bytes + 1, first_half - 1))) {
 		return -EINVAL;
 	}
-	if ((a->chunks & 7) && bytes[first_half] != (1<<(a->chunks % 8)) - 1)
+	if ((a->chunks & 7) && bytes[first_half] != (1<<(a->chunks & 7)) - 1)
 		return -EINVAL;
 
 	return 0;
