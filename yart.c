@@ -37,9 +37,9 @@
 #include <assimp/postprocess.h>
 #include <assimp/vector3.h>
 
-#include "scene.h"
-#include "buf.h"
+#include "ray-trace.h"
 #include "render-opencl.h"
+#include "buf.h"
 
 #define MOVE_SPEED 0.03f
 

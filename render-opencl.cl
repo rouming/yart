@@ -1,4 +1,4 @@
-#include "scene.h"
+#include "ray-trace.h"
 
 __kernel void render_opencl(__global struct scene *scene)
 {
