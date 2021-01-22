@@ -88,7 +88,7 @@ static inline void rb_set_parent_color(__global struct rb_node *rb,
 
 static inline void
 __rb_change_child(__global struct rb_node *old, __global struct rb_node *new,
-		  __global struct rb_node *parent, struct rb_root *root)
+		  __global struct rb_node *parent, __global struct rb_root *root)
 {
 	if (parent) {
 		if (parent->rb_left == old)
@@ -99,7 +99,7 @@ __rb_change_child(__global struct rb_node *old, __global struct rb_node *new,
 		root->rb_node = new;
 }
 
-#define RB_ROOT	(struct rb_root) { NULL, }
+#define RB_ROOT	(__global struct rb_root) { NULL, }
 #define	rb_entry(ptr, type, member) container_of(ptr, type, member)
 
 #define RB_EMPTY_ROOT(root)  ({(root)->rb_node == NULL;})
@@ -112,24 +112,24 @@ __rb_change_child(__global struct rb_node *old, __global struct rb_node *new,
 
 
 static inline void rb_erase(__global struct rb_node *,
-			    struct rb_root *);
+			    __global struct rb_root *);
 
 /* Find logical next and previous nodes in a tree */
 static inline __global struct rb_node *rb_next(__global const struct rb_node *);
 static inline __global struct rb_node *rb_prev(__global const struct rb_node *);
-static inline __global struct rb_node *rb_first(const struct rb_root *);
-static inline __global struct rb_node *rb_last(const struct rb_root *);
+static inline __global struct rb_node *rb_first(__global const struct rb_root *);
+static inline __global struct rb_node *rb_last(__global const struct rb_root *);
 
 /* Postorder iteration - always visit the parent after its children */
 static inline __global struct rb_node *rb_first_postorder(
-	const struct rb_root *);
+	__global const struct rb_root *);
 static inline __global struct rb_node *rb_next_postorder(
 	__global const struct rb_node *);
 
 /* Fast replacement of a single node without remove/rebalance/add/rebalance */
 static inline void rb_replace_node(__global struct rb_node *victim,
 				   __global struct rb_node *new,
-				   struct rb_root *root);
+				   __global struct rb_root *root);
 
 static inline void rb_link_node(__global struct rb_node *node,
 				__global struct rb_node *parent,
@@ -147,7 +147,7 @@ static inline void rb_link_node(__global struct rb_node *node,
 	})
 
 static inline void rb_erase_init(__global struct rb_node *n,
-				 struct rb_root *root)
+				 __global struct rb_root *root)
 {
 	rb_erase(n, root);
 	RB_CLEAR_NODE(n);
@@ -170,7 +170,7 @@ static inline __global struct rb_node *rb_red_parent(__global struct rb_node *re
  */
 static inline void
 __rb_rotate_set_parents(__global struct rb_node *old, __global struct rb_node *new,
-			struct rb_root *root, int color)
+			__global struct rb_root *root, int color)
 {
 	__global struct rb_node *parent = rb_parent(old);
 	new->__rb_parent_color = old->__rb_parent_color;
@@ -180,7 +180,7 @@ __rb_rotate_set_parents(__global struct rb_node *old, __global struct rb_node *n
 
 static inline void
 __rb_insert(__global struct rb_node *node,
-	    struct rb_root *root)
+	    __global struct rb_root *root)
 {
 	__global struct rb_node *parent = rb_red_parent(node);
 	__global struct rb_node *gparent;
@@ -306,7 +306,7 @@ __rb_insert(__global struct rb_node *node,
  */
 static inline void
 ____rb_erase_color(__global struct rb_node *parent,
-		   struct rb_root *root)
+		   __global struct rb_root *root)
 {
 	__global struct rb_node *node = NULL, *sibling, *tmp1, *tmp2;
 
@@ -461,7 +461,7 @@ ____rb_erase_color(__global struct rb_node *parent,
 }
 
 static inline __global struct rb_node *
-__rb_erase(__global struct rb_node *node, struct rb_root *root)
+__rb_erase(__global struct rb_node *node, __global struct rb_root *root)
 {
 	__global struct rb_node *child = node->rb_right;
 	__global struct rb_node *tmp = node->rb_left;
@@ -556,19 +556,19 @@ __rb_erase(__global struct rb_node *node, struct rb_root *root)
 
 /* Non-inline version for rb_erase() use */
 static inline void
-__rb_erase_color(__global struct rb_node *parent, struct rb_root *root)
+__rb_erase_color(__global struct rb_node *parent, __global struct rb_root *root)
 {
 	____rb_erase_color(parent, root);
 }
 
 static inline void rb_insert_color(__global struct rb_node *node,
-				   struct rb_root *root)
+				   __global struct rb_root *root)
 {
 	__rb_insert(node, root);
 }
 
 static inline void rb_erase(__global struct rb_node *node,
-			    struct rb_root *root)
+			    __global struct rb_root *root)
 {
 	__global struct rb_node *rebalance;
 	rebalance = __rb_erase(node, root);
@@ -579,7 +579,7 @@ static inline void rb_erase(__global struct rb_node *node,
 /*
  * This function returns the first node (in sort order) of the tree.
  */
-static inline __global struct rb_node *rb_first(const struct rb_root *root)
+static inline __global struct rb_node *rb_first(__global const struct rb_root *root)
 {
 	__global struct rb_node	*n;
 
@@ -591,7 +591,7 @@ static inline __global struct rb_node *rb_first(const struct rb_root *root)
 	return n;
 }
 
-static inline __global struct rb_node *rb_last(const struct rb_root *root)
+static inline __global struct rb_node *rb_last(__global const struct rb_root *root)
 {
 	__global struct rb_node	*n;
 
@@ -664,7 +664,7 @@ static inline __global struct rb_node *rb_prev(__global const struct rb_node *no
 
 static inline void rb_replace_node(__global struct rb_node *victim,
 				   __global struct rb_node *new,
-				   struct rb_root *root)
+				   __global struct rb_root *root)
 {
 	__global struct rb_node *parent = rb_parent(victim);
 
@@ -712,7 +712,7 @@ rb_next_postorder(__global const struct rb_node *node)
 }
 
 static inline __global struct rb_node *
-rb_first_postorder(const struct rb_root *root)
+rb_first_postorder(__global const struct rb_root *root)
 {
 	if (!root->rb_node)
 		return NULL;
