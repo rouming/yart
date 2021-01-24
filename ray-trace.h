@@ -523,20 +523,15 @@ out:
 	return !!isect->hit_object;
 }
 
-static inline bool
-ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
-	  struct intersection *isect, enum ray_type ray_type)
+static inline void
+ray_intersect_objects(__global struct scene *scene, struct list_head *objects,
+		      const vec3_t *orig, const vec3_t *dir,
+		      struct intersection *isect, enum ray_type ray_type)
 {
 	__global struct object *obj;
 
-	isect->hit_object = NULL;
-	isect->near = INFINITY;
-
-	/* Trace meshes */
-	bvhtree_intersect(&scene->bvhtree, orig, dir, isect, ray_type);
-
-	/* Trace other objects */
-	list_for_each_entry(obj, &scene->notmesh_objects, entry) {
+	/* Trace objects */
+	list_for_each_entry(obj, objects, entry) {
 		float near = INFINITY;
 		uint32_t index = 0;
 		vec2_t uv;
@@ -554,6 +549,25 @@ ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 			isect->uv = uv;
 		}
 	}
+}
+
+static inline bool
+ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
+	  struct intersection *isect, enum ray_type ray_type)
+{
+	isect->hit_object = NULL;
+	isect->near = INFINITY;
+
+	/* Trace meshes */
+	if (scene->dont_use_bvh)
+		ray_intersect_objects(scene, &scene->mesh_objects, orig, dir,
+				      isect, ray_type);
+	else
+		bvhtree_intersect(&scene->bvhtree, orig, dir, isect, ray_type);
+
+	/* Trace other objects */
+	ray_intersect_objects(scene, &scene->notmesh_objects, orig, dir,
+			      isect, ray_type);
 
 	return !!isect->hit_object;
 }

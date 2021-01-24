@@ -375,6 +375,7 @@ struct object_ops triangle_mesh_ops = {
 	.get_surface_props	= triangle_mesh_get_surface_props,
 };
 
+static int no_bvh;
 static int no_opencl;
 static int one_frame;
 
@@ -396,6 +397,7 @@ enum {
 };
 
 static struct option long_options[] = {
+	{"no-bvh",    no_argument,	 &no_bvh, 1},
 	{"no-opencl", no_argument,	 &no_opencl, 1},
 	{"opencl",    no_argument,	 &no_opencl, 0},
 	{"one-frame", no_argument,	 &one_frame, 1},
@@ -1732,7 +1734,8 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 				  vec3_t cam_pos, float cam_pitch,
 				  float cam_yaw, float fov,
 				  vec3_t backcolor, uint32_t ray_depth,
-				  uint32_t samples_per_pixel)
+				  uint32_t samples_per_pixel,
+				  bool no_bvh)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
@@ -1752,6 +1755,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 	assert(scene);
 
 	*scene = (struct scene) {
+		.dont_use_bvh = no_bvh,
 		.width	      = width,
 		.height	      = height,
 		.fov	      = fov,
@@ -2208,10 +2212,11 @@ static void render(struct scene *scene)
 static void usage(void)
 {
 	printf("Usage:\n"
-	       "  $ yart [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
+	       "  $ yart [--no-bvh] [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
 	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>] [--light <light params>]... [--object <object params> ]..."
 	       "\n"
 	       "OPTIONS:\n"
+	       "   --no-bvh     - don't use BVH tree, for debug purposes only\n"
 	       "   --no-opencl  - no OpenCL hardware accelaration\n"
 	       "   --one-frame  - render one frame and exit\n"
 	       "\n"
@@ -2397,7 +2402,8 @@ int main(int argc, char **argv)
 
 	/* Create scene */
 	scene = scene_create(opencl, one_frame, width, height, cam_pos, cam_pitch,
-			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel);
+			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel,
+			     no_bvh);
 	assert(scene);
 
 	/* Init default objects */

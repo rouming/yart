@@ -40,6 +40,7 @@ enum {
 };
 
 struct scene {
+	uint32_t dont_use_bvh;
 	uint32_t width;
 	uint32_t height;
 	float	 fov;
