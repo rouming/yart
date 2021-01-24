@@ -6,7 +6,7 @@
 #include "list.h"
 #include "alloc.h"
 
-#define EPSILON	   1e-8
+#define EPSILON	   1e-5
 
 struct rgba {
 	union {
