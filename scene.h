@@ -117,6 +117,8 @@ struct pattern {
 
 struct object;
 
+/* OpenCL does not support function pointers, se la vie	 */
+#ifndef __OPENCL__
 struct object_ops {
 	void (*destroy)(struct object *obj);
 	int (*unmap)(struct object *obj);
@@ -127,6 +129,7 @@ struct object_ops {
 				  vec3_t *hit_normal,
 				  vec2_t *hit_tex_coords);
 };
+#endif
 
 enum object_type {
 	UNKNOWN_OBJECT = 0,
@@ -137,7 +140,7 @@ enum object_type {
 
 struct object {
 	uint32_t          type;  /* object type */
-	struct object_ops ops;	 /* because of opencl can't be a pointer */
+	const struct object_ops *ops;
 	struct list_head entry;
 	mat4_t o2w;
 	enum material_type material;
@@ -182,12 +185,15 @@ struct triangle_mesh {
 
 struct light;
 
+/* OpenCL does not support function pointers, se la vie	 */
+#ifndef __OPENCL__
 struct light_ops {
 	void (*destroy)(struct light *light);
 	int (*unmap)(struct light *light);
 	void (*illuminate)(__global struct light *light, const vec3_t *orig,
 			   vec3_t *dir, vec3_t *intensity, float *distance);
 };
+#endif
 
 enum light_type {
 	UNKNOWN_LIGHT = 0,
@@ -197,7 +203,7 @@ enum light_type {
 
 struct light {
 	uint32_t         type;  /* light type */
-	struct light_ops ops;	/* because of opencl can't a pointer */
+	const struct light_ops *ops;
 	struct list_head entry;
 	vec3_t color;
 	float intensity;

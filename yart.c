@@ -300,7 +300,7 @@ static void opencl_invoke(struct scene *scene)
 static void object_destroy(struct object *obj)
 {
 	list_del(&obj->entry);
-	obj->ops.destroy(obj);
+	obj->ops->destroy(obj);
 }
 
 static void sphere_destroy(struct object *obj)
@@ -512,12 +512,12 @@ static void default_object_params(struct object_params *params)
 	params->o2w = m4_identity();
 }
 
-static void object_init(struct object *obj, struct object_ops *ops,
+static void object_init(struct object *obj, const struct object_ops *ops,
 			struct object_params *params)
 {
 	INIT_LIST_HEAD(&obj->entry);
 	obj->type = params->type;
-	obj->ops = *ops;
+	obj->ops = ops;
 	obj->o2w = params->o2w;
 	obj->material = params->material;
 	obj->pattern = params->pattern;
@@ -1316,12 +1316,12 @@ error:
 }
 
 static void light_init(struct light *light, enum light_type type,
-		       struct light_ops *ops, const vec3_t *color,
+		       const struct light_ops *ops, const vec3_t *color,
 		       float intensity)
 {
 	INIT_LIST_HEAD(&light->entry);
 	light->type = type;
-	light->ops = *ops;
+	light->ops = ops;
 	light->color = *color;
 	light->intensity = intensity;
 }
@@ -1534,7 +1534,7 @@ static int parse_light_params(char *subopts, int light_type, struct light *light
 static void light_destroy(struct light *light)
 {
 	list_del(&light->entry);
-	light->ops.destroy(light);
+	light->ops->destroy(light);
 }
 
 static void lights_destroy(struct scene *scene)
@@ -1824,21 +1824,21 @@ static int scene_finish(struct scene *scene)
 
 	/* Unmap mesh objects before render */
 	list_for_each_entry(object, &scene->mesh_objects, entry) {
-		ret = object->ops.unmap(object);
+		ret = object->ops->unmap(object);
 		if (ret)
 			return ret;
 	}
 
 	/* Unmap other objects before render */
 	list_for_each_entry(object, &scene->notmesh_objects, entry) {
-		ret = object->ops.unmap(object);
+		ret = object->ops->unmap(object);
 		if (ret)
 			return ret;
 	}
 
 	/* Unmap lights before render */
 	list_for_each_entry(light, &scene->lights, entry) {
-		ret = light->ops.unmap(light);
+		ret = light->ops->unmap(light);
 		if (ret)
 			return ret;
 	}

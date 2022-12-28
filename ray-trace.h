@@ -327,7 +327,7 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 		 vec2_t *uv)
 {
 #ifndef __OPENCL__
-	return obj->ops.intersect(obj, orig, dir, near, index, uv);
+	return obj->ops->intersect(obj, orig, dir, near, index, uv);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
 	switch (obj->type) {
@@ -351,8 +351,8 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 			 vec3_t *hit_normal, vec2_t *hit_tex_coords)
 {
 #ifndef __OPENCL__
-	obj->ops.get_surface_props(obj, hit_point, dir, index,
-				   uv, hit_normal, hit_tex_coords);
+	obj->ops->get_surface_props(obj, hit_point, dir, index,
+				    uv, hit_normal, hit_tex_coords);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
 	switch (obj->type) {
@@ -405,7 +405,7 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 		 vec3_t *dir, vec3_t *intensity, float *distance)
 {
 #ifndef __OPENCL__
-	light->ops.illuminate(light, orig, dir, intensity, distance);
+	light->ops->illuminate(light, orig, dir, intensity, distance);
 #else
 	/* OpenCL does not support function pointers, se la vie	 */
 	switch (light->type) {
