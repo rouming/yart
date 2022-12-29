@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #define __global
+#define __constant
 
 #else /* __OPENCL__ */
 

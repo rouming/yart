@@ -80,7 +80,7 @@ struct ray_cast_state {
 	union {
 		struct {
 			vec3_t        hit_color;
-			struct object *hit_object;
+			__global struct object *hit_object;
 		} reflect;
 		struct {
 			float   kr;

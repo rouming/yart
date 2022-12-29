@@ -524,7 +524,7 @@ out:
 }
 
 static inline void
-ray_intersect_objects(__global struct scene *scene, struct list_head *objects,
+ray_intersect_objects(__global struct scene *scene, __global struct list_head *objects,
 		      const vec3_t *orig, const vec3_t *dir,
 		      struct intersection *isect, enum ray_type ray_type)
 {
@@ -650,7 +650,7 @@ static inline float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 
 
 static inline bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
-			      struct ray_cast_state *s)
+			      __global struct ray_cast_state *s)
 {
 	struct intersection isect;
 
@@ -925,7 +925,7 @@ static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
 	return color;
 }
 
-static inline void color_vec_to_rgba32(const vec3_t *color, struct rgba *rgb)
+static inline void color_vec_to_rgba32(const vec3_t *color, __global struct rgba *rgb)
 {
 	*rgb = (struct rgba) {
 		.r = (255 * clamp(0.0f, 1.0f, color->x)),

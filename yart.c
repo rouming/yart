@@ -226,7 +226,7 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	assert(!ret);
 
 	/* Build the program */
-	ret = clBuildProgram(program, 1, &device_id, "-cl-std=CL2.0 -Werror -D__OPENCL__",
+	ret = clBuildProgram(program, 1, &device_id, "-cl-std=CL2.0 -Werror -w -D__OPENCL__",
 			     NULL, NULL);
 	if (ret == CL_BUILD_PROGRAM_FAILURE) {
 		size_t log_size;

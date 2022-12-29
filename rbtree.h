@@ -133,7 +133,7 @@ static inline void rb_replace_node(__global struct rb_node *victim,
 
 static inline void rb_link_node(__global struct rb_node *node,
 				__global struct rb_node *parent,
-				__global struct rb_node **rb_link)
+				__global struct rb_node * __global * rb_link)
 {
 	node->__rb_parent_color = (unsigned long)parent;
 	node->rb_left = node->rb_right = NULL;

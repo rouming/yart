@@ -11,7 +11,7 @@ enum {
 	NR_PLANE_NORMALS = 7,
 };
 
-static const vec3_t plane_set_normals[] = {
+static __constant const vec3_t plane_set_normals[] = {
 	[0] = {1.0f, 0.0f, 0.0f},
 	[1] = {0.0f, 1.0f, 0.0f},
 	[2] = {0.0f, 0.0f, 1.0f},
@@ -104,12 +104,12 @@ int bvhtree_build(struct bvhtree *bvh, struct scene *scene);
  * The following API can be called from any CPU and GPU
  */
 
-static inline bool octant_is_leaf(const struct octant *octant)
+static inline bool octant_is_leaf(const __global struct octant *octant)
 {
 	return octant->__leaves_cnt;
 }
 
-static inline bool extent_intersect(const struct extent *e,
+static inline bool extent_intersect(const __global struct extent *e,
 				    float numerators[NR_PLANE_NORMALS],
 				    float denominators[NR_PLANE_NORMALS],
 				    float *t_near, float *t_far)
@@ -223,7 +223,7 @@ static inline int octant_queue_insert(struct octant_queue *queue,
 				      __global struct octant *octant,
 				      float t)
 {
-	__global struct rb_node **this;
+	__global struct rb_node * __global * this;
 	__global struct rb_node *parent = NULL;
 	__global struct octant_elem *elem;
 	__global struct rb_node *new;
