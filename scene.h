@@ -31,7 +31,7 @@ struct camera {
 	float  yaw;
 };
 
-struct opencl;
+struct accel;
 struct sdl;
 
 enum {
@@ -56,7 +56,7 @@ struct scene {
 	__global void    *heap;
 	struct allocator alloc;
 	struct bvhtree bvhtree;
-	struct opencl *opencl;
+	struct accel *accel;
 	struct sdl    *sdl;
 
 	struct list_head mesh_objects;

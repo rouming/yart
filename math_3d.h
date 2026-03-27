@@ -88,9 +88,9 @@ v1.0  2016-02-15  Initial release
 // 2D vectors
 
 typedef struct { float x, y; } vec2_t;
-static inline vec2_t vec2(float x, float y)        { return (vec2_t){ x, y }; }
-static inline vec2_t v2_add(vec2_t a, vec2_t b)    { return (vec2_t){ a.x + b.x, a.y + b.y }; }
-static inline vec2_t v2_muls(vec2_t a, float s)    { return (vec2_t){ a.x * s,  a.y * s }; }
+__accelerated static inline vec2_t vec2(float x, float y)        { return (vec2_t){ x, y }; }
+__accelerated static inline vec2_t v2_add(vec2_t a, vec2_t b)    { return (vec2_t){ a.x + b.x, a.y + b.y }; }
+__accelerated static inline vec2_t v2_muls(vec2_t a, float s)    { return (vec2_t){ a.x * s,  a.y * s }; }
 
 
 //
@@ -104,22 +104,22 @@ static inline vec2_t v2_muls(vec2_t a, float s)    { return (vec2_t){ a.x * s,  
 //
 
 typedef struct { float x, y, z; } vec3_t;
-static inline vec3_t vec3(float x, float y, float z)        { return (vec3_t){ x, y, z }; }
+__accelerated static inline vec3_t vec3(float x, float y, float z)        { return (vec3_t){ x, y, z }; }
 
-static inline vec3_t v3_add   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x + b.x, a.y + b.y, a.z + b.z }; }
-static inline vec3_t v3_adds  (vec3_t a, float s)           { return (vec3_t){ a.x + s,   a.y + s,   a.z + s   }; }
-static inline vec3_t v3_sub   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x - b.x, a.y - b.y, a.z - b.z }; }
-static inline vec3_t v3_subs  (vec3_t a, float s)           { return (vec3_t){ a.x - s,   a.y - s,   a.z - s   }; }
-static inline vec3_t v3_mul   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x * b.x, a.y * b.y, a.z * b.z }; }
-static inline vec3_t v3_muls  (vec3_t a, float s)           { return (vec3_t){ a.x * s,   a.y * s,   a.z * s   }; }
-static inline vec3_t v3_div   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x / b.x, a.y / b.y, a.z / b.z }; }
-static inline vec3_t v3_divs  (vec3_t a, float s)           { return (vec3_t){ a.x / s,   a.y / s,   a.z / s   }; }
-static inline float  v3_length(vec3_t v)                    { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);          }
-static inline vec3_t v3_norm  (vec3_t v);
-static inline float  v3_dot   (vec3_t a, vec3_t b)          { return a.x*b.x + a.y*b.y + a.z*b.z;                 }
-static inline vec3_t v3_proj  (vec3_t v, vec3_t onto);
-static inline vec3_t v3_cross (vec3_t a, vec3_t b);
-static inline float  v3_angle_between(vec3_t a, vec3_t b);
+__accelerated static inline vec3_t v3_add   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x + b.x, a.y + b.y, a.z + b.z }; }
+__accelerated static inline vec3_t v3_adds  (vec3_t a, float s)           { return (vec3_t){ a.x + s,   a.y + s,   a.z + s   }; }
+__accelerated static inline vec3_t v3_sub   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x - b.x, a.y - b.y, a.z - b.z }; }
+__accelerated static inline vec3_t v3_subs  (vec3_t a, float s)           { return (vec3_t){ a.x - s,   a.y - s,   a.z - s   }; }
+__accelerated static inline vec3_t v3_mul   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x * b.x, a.y * b.y, a.z * b.z }; }
+__accelerated static inline vec3_t v3_muls  (vec3_t a, float s)           { return (vec3_t){ a.x * s,   a.y * s,   a.z * s   }; }
+__accelerated static inline vec3_t v3_div   (vec3_t a, vec3_t b)          { return (vec3_t){ a.x / b.x, a.y / b.y, a.z / b.z }; }
+__accelerated static inline vec3_t v3_divs  (vec3_t a, float s)           { return (vec3_t){ a.x / s,   a.y / s,   a.z / s   }; }
+__accelerated static inline float  v3_length(vec3_t v)                    { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);          }
+__accelerated static inline vec3_t v3_norm  (vec3_t v);
+__accelerated static inline float  v3_dot   (vec3_t a, vec3_t b)          { return a.x*b.x + a.y*b.y + a.z*b.z;                 }
+__accelerated static inline vec3_t v3_proj  (vec3_t v, vec3_t onto);
+__accelerated static inline vec3_t v3_cross (vec3_t a, vec3_t b);
+__accelerated static inline float  v3_angle_between(vec3_t a, vec3_t b);
 
 
 //
@@ -174,32 +174,32 @@ typedef union {
 	};
 } mat4_t;
 
-static inline mat4_t mat4(
+__accelerated static inline mat4_t mat4(
 	float m00, float m10, float m20, float m30,
 	float m01, float m11, float m21, float m31,
 	float m02, float m12, float m22, float m32,
 	float m03, float m13, float m23, float m33
 );
 
-static inline mat4_t m4_identity     ();
-static inline mat4_t m4_translation  (vec3_t offset);
-static inline mat4_t m4_scaling      (vec3_t scale);
-static inline mat4_t m4_rotation_x   (float angle_in_rad);
-static inline mat4_t m4_rotation_y   (float angle_in_rad);
-static inline mat4_t m4_rotation_z   (float angle_in_rad);
-static inline mat4_t m4_rotation     (float angle_in_rad, vec3_t axis);
+__accelerated static inline mat4_t m4_identity     ();
+__accelerated static inline mat4_t m4_translation  (vec3_t offset);
+__accelerated static inline mat4_t m4_scaling      (vec3_t scale);
+__accelerated static inline mat4_t m4_rotation_x   (float angle_in_rad);
+__accelerated static inline mat4_t m4_rotation_y   (float angle_in_rad);
+__accelerated static inline mat4_t m4_rotation_z   (float angle_in_rad);
+__accelerated static inline mat4_t m4_rotation     (float angle_in_rad, vec3_t axis);
 
-static inline mat4_t m4_ortho        (float left, float right, float bottom, float top, float back, float front);
-static inline mat4_t m4_perspective  (float vertical_field_of_view_in_deg, float aspect_ratio, float near_view_distance, float far_view_distance);
-static inline mat4_t m4_look_at      (vec3_t from, vec3_t to, vec3_t up);
+__accelerated static inline mat4_t m4_ortho        (float left, float right, float bottom, float top, float back, float front);
+__accelerated static inline mat4_t m4_perspective  (float vertical_field_of_view_in_deg, float aspect_ratio, float near_view_distance, float far_view_distance);
+__accelerated static inline mat4_t m4_look_at      (vec3_t from, vec3_t to, vec3_t up);
 
-static inline mat4_t m4_transpose    (mat4_t matrix);
-static inline mat4_t m4_mul          (mat4_t a, mat4_t b);
-static inline mat4_t m4_invert_affine(mat4_t matrix);
-static inline vec3_t m4_mul_pos      (mat4_t matrix, vec3_t position);
-static inline vec3_t m4_mul_dir      (mat4_t matrix, vec3_t direction);
+__accelerated static inline mat4_t m4_transpose    (mat4_t matrix);
+__accelerated static inline mat4_t m4_mul          (mat4_t a, mat4_t b);
+__accelerated static inline mat4_t m4_invert_affine(mat4_t matrix);
+__accelerated static inline vec3_t m4_mul_pos      (mat4_t matrix, vec3_t position);
+__accelerated static inline vec3_t m4_mul_dir      (mat4_t matrix, vec3_t direction);
 
-#ifndef __OPENCL__
+#if !defined(__OPENCL__) && !defined(__CUDACC__)
 static inline void   m4_print        (mat4_t matrix);
 static inline void   m4_printp       (mat4_t matrix, int width, int precision);
 static inline void   m4_fprint       (FILE* stream, mat4_t matrix);
@@ -211,7 +211,7 @@ static inline void   m4_fprintp      (FILE* stream, mat4_t matrix, int width, in
 // 3D vector functions header implementation
 //
 
-static inline vec3_t v3_norm(vec3_t v) {
+__accelerated static inline vec3_t v3_norm(vec3_t v) {
 	float len = v3_length(v);
 	if (len > 0)
 		return (vec3_t){ v.x / len, v.y / len, v.z / len };
@@ -219,11 +219,11 @@ static inline vec3_t v3_norm(vec3_t v) {
 		return (vec3_t){ 0, 0, 0};
 }
 
-static inline vec3_t v3_proj(vec3_t v, vec3_t onto) {
+__accelerated static inline vec3_t v3_proj(vec3_t v, vec3_t onto) {
 	return v3_muls(onto, v3_dot(v, onto) / v3_dot(onto, onto));
 }
 
-static inline vec3_t v3_cross(vec3_t a, vec3_t b) {
+__accelerated static inline vec3_t v3_cross(vec3_t a, vec3_t b) {
 	return (vec3_t){
 		a.y * b.z - a.z * b.y,
 		a.z * b.x - a.x * b.z,
@@ -231,7 +231,7 @@ static inline vec3_t v3_cross(vec3_t a, vec3_t b) {
 	};
 }
 
-static inline float v3_angle_between(vec3_t a, vec3_t b) {
+__accelerated static inline float v3_angle_between(vec3_t a, vec3_t b) {
 	return acosf( v3_dot(a, b) / (v3_length(a) * v3_length(b)) );
 }
 
@@ -240,21 +240,18 @@ static inline float v3_angle_between(vec3_t a, vec3_t b) {
 // Matrix functions header implementation
 //
 
-static inline mat4_t mat4(
+__accelerated static inline mat4_t mat4(
 	float m00, float m10, float m20, float m30,
 	float m01, float m11, float m21, float m31,
 	float m02, float m12, float m22, float m32,
 	float m03, float m13, float m23, float m33
 ) {
-	return (mat4_t){
-		.m[0][0] = m00, .m[1][0] = m10, .m[2][0] = m20, .m[3][0] = m30,
-		.m[0][1] = m01, .m[1][1] = m11, .m[2][1] = m21, .m[3][1] = m31,
-		.m[0][2] = m02, .m[1][2] = m12, .m[2][2] = m22, .m[3][2] = m32,
-		.m[0][3] = m03, .m[1][3] = m13, .m[2][3] = m23, .m[3][3] = m33
-	};
+	mat4_t r = {{{m00, m01, m02, m03}, {m10, m11, m12, m13},
+		      {m20, m21, m22, m23}, {m30, m31, m32, m33}}};
+	return r;
 }
 
-static inline mat4_t m4_identity() {
+__accelerated static inline mat4_t m4_identity() {
 	return mat4(
 		 1,  0,  0,  0,
 		 0,  1,  0,  0,
@@ -263,7 +260,7 @@ static inline mat4_t m4_identity() {
 	);
 }
 
-static inline mat4_t m4_translation(vec3_t offset) {
+__accelerated static inline mat4_t m4_translation(vec3_t offset) {
 	return mat4(
 		 1,  0,  0,  offset.x,
 		 0,  1,  0,  offset.y,
@@ -272,7 +269,7 @@ static inline mat4_t m4_translation(vec3_t offset) {
 	);
 }
 
-static inline mat4_t m4_scaling(vec3_t scale) {
+__accelerated static inline mat4_t m4_scaling(vec3_t scale) {
 	float x = scale.x, y = scale.y, z = scale.z;
 	return mat4(
 		 x,  0,  0,  0,
@@ -282,7 +279,7 @@ static inline mat4_t m4_scaling(vec3_t scale) {
 	);
 }
 
-static inline mat4_t m4_rotation_x(float angle_in_rad) {
+__accelerated static inline mat4_t m4_rotation_x(float angle_in_rad) {
 	float s = sinf(angle_in_rad), c = cosf(angle_in_rad);
 	return mat4(
 		1,  0,  0,  0,
@@ -292,7 +289,7 @@ static inline mat4_t m4_rotation_x(float angle_in_rad) {
 	);
 }
 
-static inline mat4_t m4_rotation_y(float angle_in_rad) {
+__accelerated static inline mat4_t m4_rotation_y(float angle_in_rad) {
 	float s = sinf(angle_in_rad), c = cosf(angle_in_rad);
 	return mat4(
 		 c,  0,  s,  0,
@@ -302,7 +299,7 @@ static inline mat4_t m4_rotation_y(float angle_in_rad) {
 	);
 }
 
-static inline mat4_t m4_rotation_z(float angle_in_rad) {
+__accelerated static inline mat4_t m4_rotation_z(float angle_in_rad) {
 	float s = sinf(angle_in_rad), c = cosf(angle_in_rad);
 	return mat4(
 		 c, -s,  0,  0,
@@ -312,7 +309,7 @@ static inline mat4_t m4_rotation_z(float angle_in_rad) {
 	);
 }
 
-static inline mat4_t m4_transpose(mat4_t matrix) {
+__accelerated static inline mat4_t m4_transpose(mat4_t matrix) {
 	return mat4(
 		matrix.m00, matrix.m01, matrix.m02, matrix.m03,
 		matrix.m10, matrix.m11, matrix.m12, matrix.m13,
@@ -331,7 +328,7 @@ static inline mat4_t m4_transpose(mat4_t matrix) {
  * But note that the article use the first index for rows and the second for
  * columns.
  */
-static inline mat4_t m4_mul(mat4_t a, mat4_t b) {
+__accelerated static inline mat4_t m4_mul(mat4_t a, mat4_t b) {
 	mat4_t result;
 	int i, j, k;
 
@@ -356,7 +353,7 @@ static inline mat4_t m4_mul(mat4_t a, mat4_t b) {
  * 
  * https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
  */
-static inline mat4_t m4_rotation(float angle_in_rad, vec3_t axis) {
+__accelerated static inline mat4_t m4_rotation(float angle_in_rad, vec3_t axis) {
 	vec3_t normalized_axis = v3_norm(axis);
 	float x = normalized_axis.x, y = normalized_axis.y, z = normalized_axis.z;
 	float c = cosf(angle_in_rad), s = sinf(angle_in_rad);
@@ -396,7 +393,7 @@ static inline mat4_t m4_rotation(float angle_in_rad, vec3_t axis) {
  * https://msdn.microsoft.com/en-us/library/windows/desktop/dd373965(v=vs.85).aspx
  * https://unspecified.wordpress.com/2012/06/21/calculating-the-gluperspective-matrix-and-other-opengl-matrix-maths/
  */
-static inline mat4_t m4_ortho(float left, float right, float bottom, float top, float back, float front) {
+__accelerated static inline mat4_t m4_ortho(float left, float right, float bottom, float top, float back, float front) {
 	float l = left, r = right, b = bottom, t = top, n = front, f = back;
 	float tx = -(r + l) / (r - l);
 	float ty = -(t + b) / (t - b);
@@ -430,7 +427,7 @@ static inline mat4_t m4_ortho(float left, float right, float bottom, float top, 
  * 
  * https://unspecified.wordpress.com/2012/06/21/calculating-the-gluperspective-matrix-and-other-opengl-matrix-maths/
  */
-static inline mat4_t m4_perspective(float vertical_field_of_view_in_deg, float aspect_ratio, float near_view_distance, float far_view_distance) {
+__accelerated static inline mat4_t m4_perspective(float vertical_field_of_view_in_deg, float aspect_ratio, float near_view_distance, float far_view_distance) {
 	float fovy_in_rad = vertical_field_of_view_in_deg / 180 * M_PI;
 	float f = 1.0f / tanf(fovy_in_rad / 2.0f);
 	float ar = aspect_ratio;
@@ -460,7 +457,7 @@ static inline mat4_t m4_perspective(float vertical_field_of_view_in_deg, float a
  *
  * Matrix is column-major.
  */
-static inline mat4_t m4_look_at(vec3_t from, vec3_t to, vec3_t up) {
+__accelerated static inline mat4_t m4_look_at(vec3_t from, vec3_t to, vec3_t up) {
 	vec3_t z = v3_norm(v3_sub(from, to)); /* forward */
 	vec3_t x = v3_norm(v3_cross(up, z));  /* right */
 	vec3_t y = v3_cross(z, x);            /* up */
@@ -503,7 +500,7 @@ static inline mat4_t m4_look_at(vec3_t from, vec3_t to, vec3_t up) {
  * 
  * https://www.khanacademy.org/math/precalculus/precalc-matrices/determinants-and-inverses-of-large-matrices/v/inverting-3x3-part-2-determinant-and-adjugate-of-a-matrix
  */
-static inline mat4_t m4_invert_affine(mat4_t matrix) {
+__accelerated static inline mat4_t m4_invert_affine(mat4_t matrix) {
 	// Create shorthands to access matrix members
 	float m00 = matrix.m00,  m10 = matrix.m10,  m20 = matrix.m20,  m30 = matrix.m30;
 	float m01 = matrix.m01,  m11 = matrix.m11,  m21 = matrix.m21,  m31 = matrix.m31;
@@ -546,7 +543,7 @@ static inline mat4_t m4_invert_affine(mat4_t matrix) {
  * (x, y, z, 1). After the multiplication the vector is reduced to 3D again by
  * dividing through the 4th component (if it's not 0 or 1).
  */
-static inline vec3_t m4_mul_pos(mat4_t matrix, vec3_t position) {
+__accelerated static inline vec3_t m4_mul_pos(mat4_t matrix, vec3_t position) {
 	vec3_t result = vec3(
 		matrix.m00 * position.x + matrix.m10 * position.y + matrix.m20 * position.z + matrix.m30,
 		matrix.m01 * position.x + matrix.m11 * position.y + matrix.m21 * position.z + matrix.m31,
@@ -586,7 +583,7 @@ vec3_t m4_mul_dir(mat4_t matrix, vec3_t direction) {
 	return result;
 }
 
-#ifndef __OPENCL__
+#if !defined(__OPENCL__) && !defined(__CUDACC__)
 static inline void m4_print(mat4_t matrix) {
 	m4_fprintp(stdout, matrix, 6, 2);
 }

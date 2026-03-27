@@ -3,7 +3,7 @@
 
 /* Host allocation API */
 
-struct opencl;
+struct accel;
 
 enum {
 	BUF_MAP_WRITE = 1<<0,
@@ -11,7 +11,7 @@ enum {
 	BUF_ZERO      = 1<<2,
 };
 
-void *buf_allocate(struct opencl *opencl, size_t sz);
+void *buf_allocate(struct accel *accel, size_t sz);
 void buf_destroy(void *ptr);
 int buf_map(void *ptr, uint32_t flags);
 int buf_unmap(void *ptr);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * YART (Yet Another Ray Tracer) boosted by OpenCL
- * Copyright (C) 2020,2021 Roman Penyaev
+ * YART (Yet Another Ray Tracer) boosted by OpenCL and CUDA
+ * Copyright (C) 2020,2021,2026 Roman Penyaev
  *
  * Based on lessons from scratchapixel.com and pbr-book.org
  *
@@ -24,8 +24,15 @@
 #include <errno.h>
 #include <endian.h>
 
+#if defined(USE_CPU)
+/* no accelerator headers */
+#elif defined(USE_CUDA)
+#include <cuda_runtime.h>
+#else
+#define USE_OPENCL
 #define CL_TARGET_OPENCL_VERSION 220
 #include <CL/cl.h>
+#endif
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -38,18 +45,28 @@
 #include <assimp/vector3.h>
 
 #include "ray-trace.h"
+#if defined(USE_CUDA)
+extern void cuda_invoke(struct scene *scene);
+#elif defined(USE_OPENCL)
 #include "render-opencl.h"
+#endif
 #include "buf.h"
 
 #define MOVE_SPEED 0.03f
 
-struct opencl {
+#ifdef USE_OPENCL
+struct accel {
 	cl_context	 context;
 	cl_device_id	 device_id;
 	cl_command_queue queue;
 	cl_program	 program;
 	cl_kernel	 kernel;
 };
+#else
+struct accel {
+	int device;
+};
+#endif
 
 struct sdl {
 	SDL_Window   *window;
@@ -58,21 +75,30 @@ struct sdl {
 };
 
 struct buf_region {
-	struct opencl *opencl;
+	struct accel *accel;
 	uint32_t      size;
 };
 
-static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
+static void *__buf_allocate(struct accel *accel, size_t sz, uint32_t flags)
 {
 	struct buf_region *reg;
 	void *ptr;
-	int ret;
 
 	if (!sz)
 		return NULL;
 
-	if (opencl) {
-		reg = clSVMAlloc(opencl->context,
+#if defined(USE_CUDA)
+	if (accel)
+		cudaMallocManaged((void **)&reg, sz + 16, cudaMemAttachGlobal);
+	else
+		reg = malloc(sz + 16);
+#elif defined(USE_CPU)
+	(void)accel;
+	reg = malloc(sz + 16);
+#else /* OpenCL */
+	if (accel) {
+		int ret;
+		reg = clSVMAlloc(accel->context,
 				 CL_MEM_READ_WRITE /* | CL_MEM_SVM_FINE_GRAIN_BUFFER */,
 				 sz + 16, 0);
 		if (reg && (flags & (BUF_MAP_WRITE | BUF_MAP_READ))) {
@@ -83,34 +109,38 @@ static void *__buf_allocate(struct opencl *opencl, size_t sz, uint32_t flags)
 			if (flags & BUF_MAP_READ)
 				cl_flags |= CL_MAP_READ;
 
-			ret = clEnqueueSVMMap(opencl->queue, CL_TRUE, cl_flags,
+			ret = clEnqueueSVMMap(accel->queue, CL_TRUE, cl_flags,
 					      (void *)reg + 16, sz, 0,
 					      NULL, NULL);
 			if (ret) {
-				clSVMFree(opencl->context, reg);
+				clSVMFree(accel->context, reg);
 				return NULL;
 			}
 		}
 	} else {
 		reg = malloc(sz + 16);
 	}
+#endif
 	if (!reg)
 		return NULL;
 
 	ptr = (void *)reg + 16;
-
 	if (flags & BUF_ZERO)
 		memset(ptr, 0, sz);
 
-	reg->opencl = opencl;
+	reg->accel = accel;
 	reg->size = sz;
 
 	return ptr;
 }
 
-void *buf_allocate(struct opencl *opencl, size_t sz)
+void *buf_allocate(struct accel *accel, size_t sz)
 {
-	return __buf_allocate(opencl, sz, BUF_ZERO | BUF_MAP_WRITE);
+#ifdef USE_OPENCL
+	return __buf_allocate(accel, sz, BUF_ZERO | BUF_MAP_WRITE);
+#else
+	return __buf_allocate(accel, sz, BUF_ZERO);
+#endif
 }
 
 void buf_destroy(void *ptr)
@@ -120,23 +150,26 @@ void buf_destroy(void *ptr)
 	if (!ptr)
 		return;
 
-	reg = (ptr - 16);
-	if (reg->opencl) {
-		clSVMFree(reg->opencl->context, reg);
+	reg = (void *)ptr - 16;
+	if (reg->accel) {
+#if defined(USE_CUDA)
+		cudaFree(reg);
+#elif defined(USE_OPENCL)
+		clSVMFree(reg->accel->context, reg);
+#endif
 	} else {
 		free(reg);
 	}
 }
 
-static int __buf_map(struct opencl *opencl, void *ptr,
-		     size_t size, uint32_t flags)
+static int __buf_map(struct accel *accel, void *ptr, size_t size, uint32_t flags)
 {
+#ifdef USE_OPENCL
 	cl_map_flags cl_flags = 0;
 
 	if (!flags)
 		return -EINVAL;
-
-	if (!opencl)
+	if (!accel)
 		return 0;
 
 	if (flags & BUF_MAP_WRITE)
@@ -144,31 +177,47 @@ static int __buf_map(struct opencl *opencl, void *ptr,
 	if (flags & BUF_MAP_READ)
 		cl_flags |= CL_MAP_READ;
 
-	return clEnqueueSVMMap(opencl->queue, CL_TRUE,
+	return clEnqueueSVMMap(accel->queue, CL_TRUE,
 			       cl_flags, ptr, size,
 			       0, NULL, NULL);
+#else
+	(void)accel; (void)ptr; (void)size; (void)flags;
+	return 0;
+#endif
 }
 
 int buf_map(void *ptr, uint32_t flags)
 {
+#ifdef USE_OPENCL
 	struct buf_region *reg = (ptr - 16);
-
-	return __buf_map(reg->opencl, ptr, reg->size, flags);
+	return __buf_map(reg->accel, ptr, reg->size, flags);
+#else
+	(void)ptr; (void)flags;
+	return 0;
+#endif
 }
 
-static int __buf_unmap(struct opencl *opencl, void *ptr)
+static int __buf_unmap(struct accel *accel, void *ptr)
 {
-	if (!opencl)
+#ifdef USE_OPENCL
+	if (!accel)
 		return 0;
-
-	return clEnqueueSVMUnmap(opencl->queue, ptr, 0, NULL, NULL);
+	return clEnqueueSVMUnmap(accel->queue, ptr, 0, NULL, NULL);
+#else
+	(void)accel; (void)ptr;
+	return 0;
+#endif
 }
 
 int buf_unmap(void *ptr)
 {
+#ifdef USE_OPENCL
 	struct buf_region *reg = (ptr - 16);
-
-	return __buf_unmap(reg->opencl, ptr);
+	return __buf_unmap(reg->accel, ptr);
+#else
+	(void)ptr;
+	return 0;
+#endif
 }
 
 static inline unsigned long long nsecs(void)
@@ -179,7 +228,28 @@ static inline unsigned long long nsecs(void)
 	return ((unsigned long long)ts.tv_sec * 1000000000ull) + ts.tv_nsec;
 }
 
-static int opencl_init(struct opencl *opencl, const char *kernel_fn)
+#if defined(USE_CPU)
+
+static void render_soft(struct scene *scene);
+
+static int accel_init(struct accel *accel, const char *kernel_fn)
+{
+	(void)accel; (void)kernel_fn;
+	return 0;
+}
+
+static void accel_deinit(struct accel *accel)
+{
+	(void)accel;
+}
+
+static void accel_invoke(struct scene *scene)
+{
+	render_soft(scene);
+}
+
+#elif !defined(USE_CUDA)
+static int accel_init(struct accel *accel, const char *kernel_fn)
 {
 	cl_platform_id platform_id = NULL;
 	cl_device_id device_id = NULL;
@@ -193,7 +263,7 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	cl_int ret;
 
 	const char *source = (char *)render_opencl_preprocessed_cl;
-	size_t size = render_opencl_preprocessed_cl_len;
+	size_t size;
 
 	/* Get platform and device information */
 	ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
@@ -259,43 +329,65 @@ static int opencl_init(struct opencl *opencl, const char *kernel_fn)
 	assert(!ret);
 
 	/* Init context */
-	opencl->context = context;
-	opencl->device_id = device_id;
-	opencl->queue = queue;
-	opencl->program = program;
-	opencl->kernel = kernel;
+	accel->context = context;
+	accel->device_id = device_id;
+	accel->queue = queue;
+	accel->program = program;
+	accel->kernel = kernel;
 
 	return 0;
 }
 
-static void opencl_deinit(struct opencl *opencl)
+static void accel_deinit(struct accel *accel)
 {
-	if (!opencl)
+	if (!accel)
 		return;
 
-	clReleaseKernel(opencl->kernel);
-	clReleaseProgram(opencl->program);
-	clReleaseCommandQueue(opencl->queue);
-	clReleaseContext(opencl->context);
+	clReleaseKernel(accel->kernel);
+	clReleaseProgram(accel->program);
+	clReleaseCommandQueue(accel->queue);
+	clReleaseContext(accel->context);
 }
 
-static void opencl_invoke(struct scene *scene)
+static void accel_invoke(struct scene *scene)
 {
-	struct opencl *opencl = scene->opencl;
+	struct accel *accel = scene->accel;
 	size_t global_item_size = scene->width * scene->height;
 	/* Divide work items into groups of 64 */
 	size_t local_item_size = 64;
 	int ret;
 
-	ret = clSetKernelArgSVMPointer(opencl->kernel, 0, scene);
+	ret = clSetKernelArgSVMPointer(accel->kernel, 0, scene);
 	assert(!ret);
 
-	ret = clEnqueueNDRangeKernel(opencl->queue, opencl->kernel, 1, NULL,
+	ret = clEnqueueNDRangeKernel(accel->queue, accel->kernel, 1, NULL,
 				     &global_item_size,
 				     &local_item_size, 0,
 				     NULL, NULL);
 	assert(!ret);
 }
+
+#else /* USE_CUDA */
+
+static int accel_init(struct accel *accel, const char *kernel_fn)
+{
+	(void)kernel_fn;
+	accel->device = 0;
+	cudaSetDevice(0);
+	return 0;
+}
+
+static void accel_deinit(struct accel *accel)
+{
+	(void)accel;
+}
+
+static void accel_invoke(struct scene *scene)
+{
+	cuda_invoke(scene);
+}
+
+#endif /* USE_CUDA */
 
 static void object_destroy(struct object *obj)
 {
@@ -376,7 +468,7 @@ struct object_ops triangle_mesh_ops = {
 };
 
 static int no_bvh;
-static int no_opencl;
+static int no_accel;
 static int one_frame;
 
 enum {
@@ -398,8 +490,8 @@ enum {
 
 static struct option long_options[] = {
 	{"no-bvh",    no_argument,	 &no_bvh, 1},
-	{"no-opencl", no_argument,	 &no_opencl, 1},
-	{"opencl",    no_argument,	 &no_opencl, 0},
+	{"no-accel",  no_argument,	 &no_accel, 1},
+	{"accel",     no_argument,	 &no_accel, 0},
 	{"one-frame", no_argument,	 &one_frame, 1},
 	{"fov",	      required_argument, 0, OPT_FOV},
 	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
@@ -567,7 +659,7 @@ static void plane_init(struct plane *plane, struct object_params *params)
 	plane->b2 = v3_cross(plane->normal, plane->b1);
 }
 
-static void triangle_mesh_init(struct opencl *opencl, struct object_params *params,
+static void triangle_mesh_init(struct accel *accel, struct object_params *params,
 			       struct triangle_mesh *mesh, uint32_t num_verts,
 			       vec3_t *verts, vec3_t *normals, vec2_t *sts)
 {
@@ -576,13 +668,13 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 	mat4_t transform_normals;
 	int i;
 
-	P = buf_allocate(opencl, num_verts * sizeof(*P));
+	P = buf_allocate(accel, num_verts * sizeof(*P));
 	assert(P);
 
-	N = buf_allocate(opencl, num_verts * sizeof(*N));
+	N = buf_allocate(accel, num_verts * sizeof(*N));
 	assert(N);
 
-	S = buf_allocate(opencl, num_verts * sizeof(*S));
+	S = buf_allocate(accel, num_verts * sizeof(*S));
 	assert(S);
 
 	/*
@@ -648,7 +740,7 @@ static void triangle_mesh_init(struct opencl *opencl, struct object_params *para
 }
 
 static void
-triangle_mesh_init_geo(struct opencl *opencl, struct object_params *params,
+triangle_mesh_init_geo(struct accel *accel, struct object_params *params,
 		       struct triangle_mesh *mesh, uint32_t nfaces,
 		       uint32_t *face_index, uint32_t *verts_index,
 		       vec3_t *verts, vec3_t *normals, vec2_t *sts)
@@ -701,7 +793,7 @@ triangle_mesh_init_geo(struct opencl *opencl, struct object_params *params,
 		}
 		k += face_index[i];
 	}
-	triangle_mesh_init(opencl, params, mesh, num_verts, flat_verts,
+	triangle_mesh_init(accel, params, mesh, num_verts, flat_verts,
 			   flat_norms, flat_sts);
 	free(flat_verts);
 	free(flat_norms);
@@ -784,12 +876,12 @@ static int triangle_mesh_load_geo(struct scene *scene,
 	assert(pos == ftell(f));
 	fclose(f);
 
-	mesh = buf_allocate(scene->opencl, sizeof(*mesh));
+	mesh = buf_allocate(scene->accel, sizeof(*mesh));
 	if (!mesh) {
 		ret = -ENOMEM;
 		goto error;
 	}
-	triangle_mesh_init_geo(scene->opencl, params, mesh, num_faces,
+	triangle_mesh_init_geo(scene->accel, params, mesh, num_faces,
 			       face_index, verts_index, verts, normals, sts);
 	scene->num_verts += mesh->num_verts;
 	list_add_tail(&mesh->obj.entry, &scene->mesh_objects);
@@ -895,12 +987,12 @@ static int triangle_mesh_load_obj(struct scene *scene,
 			}
 		}
 
-		mesh = buf_allocate(scene->opencl, sizeof(*mesh));
+		mesh = buf_allocate(scene->accel, sizeof(*mesh));
 		if (!mesh) {
 			ret = -ENOMEM;
 			goto error;
 		}
-		triangle_mesh_init(scene->opencl, params, mesh, num_verts,
+		triangle_mesh_init(scene->accel, params, mesh, num_verts,
 				   flat_verts, flat_norms, flat_sts);
 		scene->num_verts += mesh->num_verts;
 		list_add_tail(&mesh->obj.entry, &objects);
@@ -1127,7 +1219,7 @@ static int parse_object_params(char *subopts, struct object_params *params)
 
 			ret = sscanf(value, "%m[^,]", &file);
 			if (ret != 1) {
-				fprintf(stderr, "Invald object '%s' parameter\n",
+				fprintf(stderr, "Invalid object '%s' parameter\n",
 					object_token[c]);
 				return -EINVAL;
 			}
@@ -1146,7 +1238,7 @@ static int parse_object_params(char *subopts, struct object_params *params)
 
 			ret = sscanf(value, "%m[^,]", &flag);
 			if (ret != 1) {
-				fprintf(stderr, "Invald object '%s' parameter\n",
+				fprintf(stderr, "Invalid object '%s' parameter\n",
 					object_token[c]);
 				return -EINVAL;
 			}
@@ -1172,7 +1264,7 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		if (fptr) {
 			ret = sscanf(value, "%f", fptr);
 			if (ret != 1) {
-				fprintf(stderr, "Invald object '%s' parameter\n",
+				fprintf(stderr, "Invalid object '%s' parameter\n",
 					object_token[c]);
 				return -EINVAL;
 			}
@@ -1241,7 +1333,7 @@ static int objects_create_from_params(struct scene *scene,
 	case SPHERE_OBJECT: {
 		struct sphere *sphere;
 
-		sphere = buf_allocate(scene->opencl, sizeof(*sphere));
+		sphere = buf_allocate(scene->accel, sizeof(*sphere));
 		if (!sphere)
 			return -ENOMEM;
 		sphere_init(sphere, params);
@@ -1251,7 +1343,7 @@ static int objects_create_from_params(struct scene *scene,
 	case PLANE_OBJECT: {
 		struct plane *plane;
 
-		plane = buf_allocate(scene->opencl, sizeof(*plane));
+		plane = buf_allocate(scene->accel, sizeof(*plane));
 		if (!plane)
 			return -ENOMEM;
 		plane_init(plane, params);
@@ -1545,7 +1637,7 @@ static void lights_destroy(struct scene *scene)
 		light_destroy(light);
 }
 
-static struct light *light_create(struct opencl *opencl, int light_type)
+static struct light *light_create(struct accel *accel, int light_type)
 {
 	vec3_t color = vec3(1.0f, 1.0f, 1.0f);
 	float intensity = 5.0f;
@@ -1554,7 +1646,7 @@ static struct light *light_create(struct opencl *opencl, int light_type)
 	case DISTANT_LIGHT: {
 		struct distant_light *dlight;
 
-		dlight =  buf_allocate(opencl, sizeof(*dlight));
+		dlight =  buf_allocate(accel, sizeof(*dlight));
 		if (!dlight)
 			return NULL;
 		distant_light_init(dlight, &color, intensity);
@@ -1563,7 +1655,7 @@ static struct light *light_create(struct opencl *opencl, int light_type)
 	case POINT_LIGHT: {
 		struct point_light *plight;
 
-		plight =  buf_allocate(opencl, sizeof(*plight));
+		plight =  buf_allocate(accel, sizeof(*plight));
 		if (!plight)
 			return NULL;
 		point_light_init(plight, &color, intensity);
@@ -1603,7 +1695,7 @@ static int lights_create(struct scene *scene, int argc, char **argv)
 				ret = -EINVAL;
 				goto error;
 			}
-			light = light_create(scene->opencl, light_type);
+			light = light_create(scene->accel, light_type);
 			if (!light) {
 				ret = -ENOMEM;
 				goto error;
@@ -1712,14 +1804,14 @@ static void camera_update_c2w(struct scene *scene)
 	struct camera *cam = &scene->cam;
 	int ret;
 
-	ret = __buf_map(scene->opencl, &scene->c2w, sizeof(scene->c2w),
+	ret = __buf_map(scene->accel, &scene->c2w, sizeof(scene->c2w),
 			BUF_MAP_WRITE);
 	assert(!ret);
 
 	scene->c2w = m4_look_at(cam->pos, v3_add(cam->pos, cam->dir),
 				vec3(0.0f, 1.0f, 0.0f));
 
-	ret = __buf_unmap(scene->opencl, &scene->c2w);
+	ret = __buf_unmap(scene->accel, &scene->c2w);
 	assert(!ret);
 }
 
@@ -1729,7 +1821,7 @@ static void camera_inc_angles(struct scene *scene, float inc_pitch, float inc_ya
 	camera_set_angles(scene, cam->pitch + inc_pitch, cam->yaw + inc_yaw);
 }
 
-static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
+static struct scene *scene_create(struct accel *accel, bool no_sdl,
 				  uint32_t width, uint32_t height,
 				  vec3_t cam_pos, float cam_pitch,
 				  float cam_yaw, float fov,
@@ -1744,14 +1836,14 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 	int ret;
 
 	/* Don't mmap by default */
-	framebuffer = __buf_allocate(opencl, width * height * sizeof(*framebuffer), 0);
+	framebuffer = __buf_allocate(accel, width * height * sizeof(*framebuffer), 0);
 	assert(framebuffer);
-	ray_states = __buf_allocate(opencl, width * height * ray_depth * sizeof(*ray_states), 0);
+	ray_states = __buf_allocate(accel, width * height * ray_depth * sizeof(*ray_states), 0);
 	assert(ray_states);
 
-	heap = buf_allocate(opencl, HEAP_SIZE);
+	heap = buf_allocate(accel, HEAP_SIZE);
 	assert(heap);
-	scene = buf_allocate(opencl, sizeof(*scene));
+	scene = buf_allocate(accel, sizeof(*scene));
 	assert(scene);
 
 	*scene = (struct scene) {
@@ -1765,7 +1857,7 @@ static struct scene *scene_create(struct opencl *opencl, bool no_sdl,
 			      = samples_per_pixel,
 		.c2w	      = m4_identity(),
 		.bias	      = 0.0001,
-		.opencl	      = opencl,
+		.accel	      = accel,
 		.framebuffer  = framebuffer,
 		.ray_states   = ray_states,
 		.heap         = heap,
@@ -1887,7 +1979,7 @@ static int scene_map_before_read(struct scene *scene)
 	}
 
 	/* Map stats */
-	ret = __buf_map(scene->opencl, &scene->stat, sizeof(scene->stat),
+	ret = __buf_map(scene->accel, &scene->stat, sizeof(scene->stat),
 			BUF_MAP_READ);
 	if (ret) {
 		fprintf(stderr, "Failed to map stat for reading\n");
@@ -1896,21 +1988,21 @@ static int scene_map_before_read(struct scene *scene)
 	}
 
 	/* Map allocator and bitmap */
-	ret = __buf_map(scene->opencl, &scene->alloc, sizeof(scene->alloc),
+	ret = __buf_map(scene->accel, &scene->alloc, sizeof(scene->alloc),
 			BUF_MAP_READ);
 	if (ret) {
 		fprintf(stderr, "Failed to map alloctor struct for reading\n");
 		buf_unmap(scene->framebuffer);
-		__buf_unmap(scene->opencl, &scene->stat);
+		__buf_unmap(scene->accel, &scene->stat);
 		return ret;
 	}
-	ret = __buf_map(scene->opencl, scene->alloc.free_bitmap,
+	ret = __buf_map(scene->accel, scene->alloc.free_bitmap,
 			scene->alloc.nbytes_bitmap, BUF_MAP_READ);
 	if (ret) {
 		fprintf(stderr, "Failed to map alloctor struct for reading\n");
 		buf_unmap(scene->framebuffer);
-		__buf_unmap(scene->opencl, &scene->stat);
-		__buf_unmap(scene->opencl, &scene->alloc);
+		__buf_unmap(scene->accel, &scene->stat);
+		__buf_unmap(scene->accel, &scene->alloc);
 		return ret;
 	}
 
@@ -1921,11 +2013,11 @@ static void scene_unmap_after_read(struct scene *scene)
 {
 	int ret;
 
-	ret = __buf_unmap(scene->opencl, &scene->alloc);
+	ret = __buf_unmap(scene->accel, &scene->alloc);
 	assert(!ret);
-	ret = __buf_unmap(scene->opencl, scene->alloc.free_bitmap);
+	ret = __buf_unmap(scene->accel, scene->alloc.free_bitmap);
 	assert(!ret);
-	ret = __buf_unmap(scene->opencl, &scene->stat);
+	ret = __buf_unmap(scene->accel, &scene->stat);
 	assert(!ret);
 	ret = buf_unmap(scene->framebuffer);
 	assert(!ret);
@@ -1938,8 +2030,8 @@ static void one_frame_render(struct scene *scene)
 	int i, ret;
 
 	ns = nsecs();
-	if (scene->opencl) {
-		opencl_invoke(scene);
+	if (scene->accel) {
+		accel_invoke(scene);
 	} else {
 		render_soft(scene);
 	}
@@ -2185,8 +2277,8 @@ static void render(struct scene *scene)
 			camera_update_c2w(scene);
 
 		/* Render one frame */
-		if (scene->opencl) {
-			opencl_invoke(scene);
+		if (scene->accel) {
+			accel_invoke(scene);
 		} else {
 			render_soft(scene);
 		}
@@ -2212,12 +2304,12 @@ static void render(struct scene *scene)
 static void usage(void)
 {
 	printf("Usage:\n"
-	       "  $ yart [--no-bvh] [--no-opencl] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
+	       "  $ yart [--no-bvh] [--no-accel] [--one-frame] [--fov <fov>] [--width <width>] [--height <height>]\n"
 	       "         [--pitch <pitch>] [--yaw <yaw>] [--pos <pos>] [--light <light params>]... [--object <object params> ]..."
 	       "\n"
 	       "OPTIONS:\n"
 	       "   --no-bvh     - don't use BVH tree, for debug purposes only\n"
-	       "   --no-opencl  - no OpenCL hardware accelaration\n"
+	       "   --no-accel   - no hardware acceleration\n"
 	       "   --one-frame  - render one frame and exit\n"
 	       "\n"
 	       "ARGUMENTS:\n"
@@ -2279,7 +2371,7 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-	struct opencl __opencl, *opencl = NULL;
+	struct accel __accel, *accel = NULL;
 	struct scene *scene;
 
 	uint32_t width = 1024;
@@ -2392,16 +2484,16 @@ int main(int argc, char **argv)
 			usage();
 		}
 	}
-	if (!no_opencl) {
-		/* Init opencl context */
-		opencl = &__opencl;
-		ret = opencl_init(opencl, "render_opencl");
+	if (!no_accel) {
+		/* Init accelerator context */
+		accel = &__accel;
+		ret = accel_init(accel, "render");
 		if (ret)
 			return -1;
 	}
 
 	/* Create scene */
-	scene = scene_create(opencl, one_frame, width, height, cam_pos, cam_pitch,
+	scene = scene_create(accel, one_frame, width, height, cam_pos, cam_pitch,
 			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel,
 			     no_bvh);
 	assert(scene);
@@ -2427,7 +2519,7 @@ int main(int argc, char **argv)
 
 out:
 	scene_destroy(scene);
-	opencl_deinit(opencl);
+	accel_deinit(accel);
 
 	return ret;
 }

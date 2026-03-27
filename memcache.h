@@ -27,7 +27,7 @@ struct memcache {
 	uint16_t         alloced;
 };
 
-static inline int
+__accelerated static inline int
 memcache_init(struct memcache *mc, __global struct allocator *a,
 	      uint16_t cache_size)
 {
@@ -58,7 +58,7 @@ memcache_init(struct memcache *mc, __global struct allocator *a,
 	return 0;
 }
 
-static inline int memcache_deinit(struct memcache *mc)
+__accelerated static inline int memcache_deinit(struct memcache *mc)
 {
 	if (mc->cached_chunk)
 		free_chunk(mc->a, mc->cached_chunk);
@@ -67,7 +67,7 @@ static inline int memcache_deinit(struct memcache *mc)
 	return mc->alloced ? -EINVAL : 0;
 }
 
-static inline void
+__accelerated static inline void
 memcache_init_free_bitmap(struct memcache *mc,
 			  __global struct memcache_chunk *chunk)
 {
@@ -85,13 +85,13 @@ memcache_init_free_bitmap(struct memcache *mc,
 		memset(bytes + first_half + 1, 0, last_half);
 }
 
-static inline __global void *memcache_alloc(struct memcache *mc)
+__accelerated static inline __global void *memcache_alloc(struct memcache *mc)
 {
 	__global struct memcache_chunk *chunk;
 	uint32_t i, bit;
 
 	if (!(chunk = mc->cached_chunk)) {
-		chunk = alloc_chunk(mc->a, get_alloc_hint());
+		chunk = (struct memcache_chunk *)alloc_chunk(mc->a, get_alloc_hint());
 		mc->cached_chunk = chunk;
 		if (!chunk)
 			/* No memory */
@@ -122,7 +122,7 @@ static inline __global void *memcache_alloc(struct memcache *mc)
 		(mc->cache_size * ((i<<5) + (bit-1)));
 }
 
-static inline int memcache_free(struct memcache *mc, __global void *p)
+__accelerated static inline int memcache_free(struct memcache *mc, __global void *p)
 {
 	__global struct memcache_chunk *chunk;
 	__global void *buf;
@@ -132,7 +132,7 @@ static inline int memcache_free(struct memcache *mc, __global void *p)
 	if (!p)
 		return 0;
 
-	chunk = ALIGN_PTR_DOWN(p, (uintptr_t)mc->a->chunk_size);
+	chunk = (struct memcache_chunk *)ALIGN_PTR_DOWN(p, (uintptr_t)mc->a->chunk_size);
 	if (chunk == p)
 		/* Invalid? */
 		return -EINVAL;
@@ -142,7 +142,7 @@ static inline int memcache_free(struct memcache *mc, __global void *p)
 		/* Invalid? */
 		return -EINVAL;
 
-	off = p - buf;
+	off = (char *)p - (char *)buf;
 	if (off % mc->cache_size)
 		/* Invalid? */
 		return -EINVAL;

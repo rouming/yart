@@ -6,7 +6,7 @@
 /**
  * https://en.wikipedia.org/wiki/Halton_sequence
  */
-static inline float halton_seq(int i, int b)
+__accelerated static inline float halton_seq(int i, int b)
 {
 	float r = 0.0f;
 	float v = 1.0f;
@@ -23,7 +23,7 @@ static inline float halton_seq(int i, int b)
 /**
  * Compute the roots of a quadratic equation
  */
-static inline bool solve_quadratic(float a, float b, float c, float *x0, float *x1)
+__accelerated static inline bool solve_quadratic(float a, float b, float c, float *x0, float *x1)
 {
 	float discr = b * b - 4 * a * c;
 	if (discr < 0)
@@ -43,7 +43,7 @@ static inline bool solve_quadratic(float a, float b, float c, float *x0, float *
 }
 
 
-static inline bool sphere_intersect(__global struct object *obj, const vec3_t *orig,
+__accelerated static inline bool sphere_intersect(__global struct object *obj, const vec3_t *orig,
 				    const vec3_t *dir, float *near, uint32_t *index,
 				    vec2_t *uv)
 {
@@ -81,7 +81,7 @@ static inline bool sphere_intersect(__global struct object *obj, const vec3_t *o
 	return true;
 }
 
-static inline void sphere_get_surface_props(__global struct object *obj,
+__accelerated static inline void sphere_get_surface_props(__global struct object *obj,
 					    const vec3_t *hit_point,
 					    const vec3_t *dir, uint32_t index,
 					    const vec2_t *uv, vec3_t *hit_normal,
@@ -105,7 +105,7 @@ static inline void sphere_get_surface_props(__global struct object *obj,
 }
 
 
-static inline bool plane_intersect(__global struct object *obj, const vec3_t *orig,
+__accelerated static inline bool plane_intersect(__global struct object *obj, const vec3_t *orig,
 				   const vec3_t *dir, float *near, uint32_t *index,
 				   vec2_t *uv)
 {
@@ -132,7 +132,7 @@ static inline bool plane_intersect(__global struct object *obj, const vec3_t *or
 	return *near > 0;
 }
 
-static inline void plane_get_surface_props(__global struct object *obj,
+__accelerated static inline void plane_get_surface_props(__global struct object *obj,
 					   const vec3_t *hit_point,
 					   const vec3_t *dir, uint32_t index,
 					   const vec2_t *uv, vec3_t *hit_normal,
@@ -153,7 +153,7 @@ static inline void plane_get_surface_props(__global struct object *obj,
 /**
  * Möller-Trumbore triangle intersection
  */
-static inline bool
+__accelerated static inline bool
 triangle_intersect(const vec3_t *orig, const vec3_t *dir,
 		   __global const vec3_t *v0,
 		   __global const vec3_t *v1,
@@ -189,7 +189,7 @@ triangle_intersect(const vec3_t *orig, const vec3_t *dir,
 	return (*t > 0);
 }
 
-static inline bool __triangle_mesh_intersect(__global const struct triangle_mesh *mesh,
+__accelerated static inline bool __triangle_mesh_intersect(__global const struct triangle_mesh *mesh,
 					     const vec3_t *orig, const vec3_t *dir,
 					     float *near, uint32_t i, vec2_t *uv)
 {
@@ -211,7 +211,7 @@ static inline bool __triangle_mesh_intersect(__global const struct triangle_mesh
 	return false;
 }
 
-static inline bool triangle_mesh_intersect(__global struct object *obj,
+__accelerated static inline bool triangle_mesh_intersect(__global struct object *obj,
 					   const vec3_t *orig, const vec3_t *dir,
 					   float *near, uint32_t *index, vec2_t *uv)
 {
@@ -233,7 +233,7 @@ static inline bool triangle_mesh_intersect(__global struct object *obj,
 	return isect;
 }
 
-static inline void triangle_mesh_get_surface_props(__global struct object *obj,
+__accelerated static inline void triangle_mesh_get_surface_props(__global struct object *obj,
 						   const vec3_t *hit_point,
 						   const vec3_t *dir, uint32_t index,
 						   const vec2_t *uv, vec3_t *hit_normal,
@@ -289,7 +289,7 @@ static inline void triangle_mesh_get_surface_props(__global struct object *obj,
 }
 
 
-static inline void distant_light_illuminate(__global struct light *light, const vec3_t *orig,
+__accelerated static inline void distant_light_illuminate(__global struct light *light, const vec3_t *orig,
 					    vec3_t *dir, vec3_t *intensity, float *distance)
 {
 	__global struct distant_light *dlight;
@@ -302,7 +302,7 @@ static inline void distant_light_illuminate(__global struct light *light, const 
 }
 
 
-static inline void point_light_illuminate(__global struct light *light, const vec3_t *orig,
+__accelerated static inline void point_light_illuminate(__global struct light *light, const vec3_t *orig,
 					  vec3_t *dir, vec3_t *intensity, float *distance)
 {
 	__global struct point_light *plight;
@@ -312,24 +312,25 @@ static inline void point_light_illuminate(__global struct light *light, const ve
 
 	*dir = v3_sub(*orig, plight->pos);
 	r_pow2 = v3_dot(*dir, *dir);
+	if (r_pow2 < EPSILON)
+		r_pow2 = EPSILON;
 	*distance = sqrt(r_pow2);
 	dir->x /= *distance;
 	dir->y /= *distance;
 	dir->z /= *distance;
 	*intensity = v3_muls(plight->light.color, plight->light.intensity);
-	/* TODO: div by 0 */
 	*intensity = v3_divs(*intensity, 4 * M_PI * r_pow2);
 }
 
-static inline bool
+__accelerated static inline bool
 object_intersect(__global struct object *obj, const vec3_t *orig,
 		 const vec3_t *dir, float *near, uint32_t *index,
 		 vec2_t *uv)
 {
-#ifndef __OPENCL__
+#if !defined(__OPENCL__) && !defined(__CUDA_ARCH__)
 	return obj->ops->intersect(obj, orig, dir, near, index, uv);
 #else
-	/* OpenCL does not support function pointers, se la vie	 */
+	/* OpenCL/CUDA device: no function pointers */
 	switch (obj->type) {
 	case SPHERE_OBJECT:
 		return sphere_intersect(obj, orig, dir, near, index, uv);
@@ -345,16 +346,16 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 #endif
 }
 
-static inline void
+__accelerated static inline void
 object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 			 const vec3_t *dir, uint32_t index, const vec2_t *uv,
 			 vec3_t *hit_normal, vec2_t *hit_tex_coords)
 {
-#ifndef __OPENCL__
+#if !defined(__OPENCL__) && !defined(__CUDA_ARCH__)
 	obj->ops->get_surface_props(obj, hit_point, dir, index,
 				    uv, hit_normal, hit_tex_coords);
 #else
-	/* OpenCL does not support function pointers, se la vie	 */
+	/* OpenCL/CUDA device: no function pointers */
 	switch (obj->type) {
 	case SPHERE_OBJECT:
 		sphere_get_surface_props(obj, hit_point, dir, index,
@@ -376,7 +377,7 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 #endif
 }
 
-static inline float object_pattern(__global struct object *obj,
+__accelerated static inline float object_pattern(__global struct object *obj,
 				   vec2_t *hit_tex_coords)
 {
 	float angle, co, si, s, t, scale;
@@ -400,14 +401,14 @@ static inline float object_pattern(__global struct object *obj,
 	return 1.0f;
 }
 
-static inline void
+__accelerated static inline void
 light_illuminate(__global struct light *light, const vec3_t *orig,
 		 vec3_t *dir, vec3_t *intensity, float *distance)
 {
-#ifndef __OPENCL__
+#if !defined(__OPENCL__) && !defined(__CUDA_ARCH__)
 	light->ops->illuminate(light, orig, dir, intensity, distance);
 #else
-	/* OpenCL does not support function pointers, se la vie	 */
+	/* OpenCL/CUDA device: no function pointers */
 	switch (light->type) {
 	case DISTANT_LIGHT:
 		distant_light_illuminate(light, orig, dir, intensity, distance);
@@ -423,7 +424,7 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 #endif
 }
 
-static inline bool bvhtree_intersect(__global const struct bvhtree *bvh,
+__accelerated static inline bool bvhtree_intersect(__global const struct bvhtree *bvh,
 				     const vec3_t *orig, const vec3_t *dir,
 				     struct intersection *isect,
 				     enum ray_type ray_type)
@@ -523,7 +524,7 @@ out:
 	return !!isect->hit_object;
 }
 
-static inline void
+__accelerated static inline void
 ray_intersect_objects(__global struct scene *scene, __global struct list_head *objects,
 		      const vec3_t *orig, const vec3_t *dir,
 		      struct intersection *isect, enum ray_type ray_type)
@@ -551,7 +552,7 @@ ray_intersect_objects(__global struct scene *scene, __global struct list_head *o
 	}
 }
 
-static inline bool
+__accelerated static inline bool
 ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 	  struct intersection *isect, enum ray_type ray_type)
 {
@@ -575,7 +576,7 @@ ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 /**
  * Compute reflection direction
  */
-static inline vec3_t reflect(const vec3_t *I, const vec3_t *N)
+__accelerated static inline vec3_t reflect(const vec3_t *I, const vec3_t *N)
 {
 	float dot = v3_dot(*I, *N);
 
@@ -585,7 +586,7 @@ static inline vec3_t reflect(const vec3_t *I, const vec3_t *N)
 /**
  * Compute refraction direction
  */
-static inline vec3_t refract(const vec3_t *I, const vec3_t *N, float ior)
+__accelerated static inline vec3_t refract(const vec3_t *I, const vec3_t *N, float ior)
 {
 	float cosi = clamp(-1.0f, 1.0f, v3_dot(*I, *N));
 	float etai = 1, etat = ior, eta, k;
@@ -615,7 +616,7 @@ static inline vec3_t refract(const vec3_t *I, const vec3_t *N, float ior)
  * Evaluate Fresnel equation (ration of reflected light for a
  * given incident direction and surface normal)
  */
-static inline float fresnel(const vec3_t *I, const vec3_t *N, float ior)
+__accelerated static inline float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 {
 	float cosi = clamp(-1.0f, 1.0f, v3_dot(*I, *N));
 	float etai = 1.0f, etat = ior;
@@ -649,12 +650,13 @@ static inline float fresnel(const vec3_t *I, const vec3_t *N, float ior)
 }
 
 
-static inline bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
+__accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
 			      __global struct ray_cast_state *s)
 {
 	struct intersection isect;
 
 	vec3_t hit_point, hit_normal, hit_color, dir = in->dir;
+	vec3_t refract_color, reflect_color;
 	vec2_t hit_tex_coords;
 	bool hit;
 
@@ -767,9 +769,9 @@ reflect_continue:
 		break;
 	}
 	case MATERIAL_REFLECT_REFRACT: {
-		vec3_t refract_color = vec3(0.0f, 0.0f, 0.0f);
-		vec3_t reflect_color = vec3(0.0f, 0.0f, 0.0f);
 		vec3_t reflect_orig, reflect_dir, bias;
+		refract_color = vec3(0.0f, 0.0f, 0.0f);
+		reflect_color = vec3(0.0f, 0.0f, 0.0f);
 		bool outside;
 		float kr;
 
@@ -838,7 +840,7 @@ rr_reflect_continue:
 	return false;
 }
 
-static inline vec3_t ray_cast(__global struct scene *scene,
+__accelerated static inline vec3_t ray_cast(__global struct scene *scene,
 			      __global struct ray_cast_state *ray_states,
 			      const vec3_t *orig, const vec3_t *dir)
 {
@@ -893,7 +895,7 @@ static inline vec3_t ray_cast(__global struct scene *scene,
 	return scene->backcolor;
 }
 
-static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
+__accelerated static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
 					const vec3_t *orig, int ix, int iy,
 					float scale, float img_ratio)
 {
@@ -925,13 +927,12 @@ static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
 	return color;
 }
 
-static inline void color_vec_to_rgba32(const vec3_t *color, __global struct rgba *rgb)
+__accelerated static inline void color_vec_to_rgba32(const vec3_t *color, __global struct rgba *rgb)
 {
-	*rgb = (struct rgba) {
-		.r = (255 * clamp(0.0f, 1.0f, color->x)),
-		.g = (255 * clamp(0.0f, 1.0f, color->y)),
-		.b = (255 * clamp(0.0f, 1.0f, color->z))
-	};
+	rgb->r = (uint8_t)(255 * clamp(0.0f, 1.0f, color->x));
+	rgb->g = (uint8_t)(255 * clamp(0.0f, 1.0f, color->y));
+	rgb->b = (uint8_t)(255 * clamp(0.0f, 1.0f, color->z));
+	rgb->a = 255;
 }
 
 #endif /* RAY_TRACE_H */

@@ -104,12 +104,12 @@ int bvhtree_build(struct bvhtree *bvh, struct scene *scene);
  * The following API can be called from any CPU and GPU
  */
 
-static inline bool octant_is_leaf(const __global struct octant *octant)
+__accelerated static inline bool octant_is_leaf(const __global struct octant *octant)
 {
 	return octant->__leaves_cnt;
 }
 
-static inline bool extent_intersect(const __global struct extent *e,
+__accelerated static inline bool extent_intersect(const __global struct extent *e,
 				    float numerators[NR_PLANE_NORMALS],
 				    float denominators[NR_PLANE_NORMALS],
 				    float *t_near, float *t_far)
@@ -148,7 +148,7 @@ struct octant_queue {
 	__global struct rb_root  *root;
 };
 
-static inline int octant_queue_init(struct octant_queue *queue,
+__accelerated static inline int octant_queue_init(struct octant_queue *queue,
 				    __global struct allocator *a)
 {
 	int ret;
@@ -162,7 +162,7 @@ static inline int octant_queue_init(struct octant_queue *queue,
 	return 0;
 }
 
-static inline int octant_queue_deinit(struct octant_queue *queue)
+__accelerated static inline int octant_queue_deinit(struct octant_queue *queue)
 {
 	__global struct octant_elem *elem;
 	__global struct rb_node *node;
@@ -186,7 +186,7 @@ static inline int octant_queue_deinit(struct octant_queue *queue)
 	return memcache_deinit(&queue->mc);
 }
 
-static inline __global struct octant *
+__accelerated static inline __global struct octant *
 octant_queue_pop_first(struct octant_queue *queue, float *t)
 {
 	__global struct octant_elem *elem;
@@ -207,7 +207,7 @@ octant_queue_pop_first(struct octant_queue *queue, float *t)
 	return octant;
 }
 
-static float cmp_octants(__global const struct rb_node *a_,
+__accelerated static float cmp_octants(__global const struct rb_node *a_,
 			 __global const struct rb_node *b_)
 {
 	__global struct octant_elem *a;
@@ -219,7 +219,7 @@ static float cmp_octants(__global const struct rb_node *a_,
 	return a->t - b->t;
 }
 
-static inline int octant_queue_insert(struct octant_queue *queue,
+__accelerated static inline int octant_queue_insert(struct octant_queue *queue,
 				      __global struct octant *octant,
 				      float t)
 {
@@ -230,7 +230,7 @@ static inline int octant_queue_insert(struct octant_queue *queue,
 	float cmp;
 
 	if (!queue->root) {
-		queue->root = memcache_alloc(&queue->mc);
+		queue->root = (struct rb_root *)memcache_alloc(&queue->mc);
 		if (!queue->root)
 			return -ENOMEM;
 
@@ -238,7 +238,7 @@ static inline int octant_queue_insert(struct octant_queue *queue,
 	}
 	this = &queue->root->rb_node;
 
-	elem = memcache_alloc(&queue->mc);
+	elem = (struct octant_elem *)memcache_alloc(&queue->mc);
 	if (!elem)
 		return -ENOMEM;
 

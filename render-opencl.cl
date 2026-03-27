@@ -1,6 +1,6 @@
 #include "ray-trace.h"
 
-__kernel void render_opencl(__global struct scene *scene)
+__kernel void render(__global struct scene *scene)
 {
 	float x, y, scale, img_ratio;
 	vec3_t orig, dir, color;

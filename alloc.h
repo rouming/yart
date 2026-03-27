@@ -69,12 +69,12 @@ static inline int alloc_init(__global struct allocator *a, __global void *buffer
 
 		nbytes_bitmap = round_up(chunks, sizeof(*a->free_bitmap) << 3) >> 3;
 		/* Align up on chunk size */
-		aligned = ALIGN_PTR_UP(buffer + nbytes_bitmap, (uintptr_t)chunk_size);
-		nbytes_bitmap = aligned - buffer;
+		aligned = ALIGN_PTR_UP((char *)buffer + nbytes_bitmap, (uintptr_t)chunk_size);
+		nbytes_bitmap = (char *)aligned - (char *)buffer;
 		real_chunks = (size - nbytes_bitmap) >> chunk_shift;
 		if (chunks != real_chunks && converge < 2) {
 			/* Recalculate once more taking bitmap into account */
-			converge += (abs(chunks - real_chunks) == 1);
+			converge += (abs((int)(chunks - real_chunks)) == 1);
 			chunks = real_chunks;
 			continue;
 		}
@@ -82,7 +82,7 @@ static inline int alloc_init(__global struct allocator *a, __global void *buffer
 	}
 
 	/* Bitmap goes first to keep proper alignment for chunks buffer */
-	a->free_bitmap = buffer;
+	a->free_bitmap = (uint64_t *)buffer;
 	/* Make OpenCL gcc happy */
 	a->buffer = (__global char *)buffer + nbytes_bitmap;
 	a->nbytes_bitmap = nbytes_bitmap;
@@ -119,7 +119,7 @@ static inline int alloc_deinit(__global struct allocator *a)
 	return 0;
 }
 
-static inline __global void *__alloc_chunk(__global struct allocator *a, uint32_t i)
+__accelerated static inline __global void *__alloc_chunk(__global struct allocator *a, uint32_t i)
 {
 	__global uint64_t *p;
 	uint64_t old, new;
@@ -141,7 +141,7 @@ static inline __global void *__alloc_chunk(__global struct allocator *a, uint32_
 	return (__global char *)a->buffer + (ch << a->chunk_shift);
 }
 
-static inline int __free_chunk(__global struct allocator *a, uint32_t chunk)
+__accelerated static inline int __free_chunk(__global struct allocator *a, uint32_t chunk)
 {
 	__global uint64_t *p;
 	uint64_t old, new;
@@ -171,7 +171,7 @@ static inline int __free_chunk(__global struct allocator *a, uint32_t chunk)
  * in order to reduce contention on the same cache line if many threads
  * heavily use allocator.
  */
-static inline __global void *alloc_chunk(__global struct allocator *a, int hint)
+__accelerated static inline __global void *alloc_chunk(__global struct allocator *a, int hint)
 {
 	uint32_t i, start = hint % a->nlongs_bitmap;
 	__global void *chunk;
@@ -194,7 +194,7 @@ static inline __global void *alloc_chunk(__global struct allocator *a, int hint)
 	return NULL;
 }
 
-static inline int free_chunk(__global struct allocator *a, __global void *chunk)
+__accelerated static inline int free_chunk(__global struct allocator *a, __global void *chunk)
 {
 	uintptr_t ch;
 
@@ -205,7 +205,7 @@ static inline int free_chunk(__global struct allocator *a, __global void *chunk)
 		/* Beyond? Invalid */
 		return -EINVAL;
 
-	ch = chunk - a->buffer;
+	ch = (char *)chunk - (char *)a->buffer;
 	if (ch & ((1 << a->chunk_shift)-1))
 		/* Not aligned? Invalid */
 		return -EINVAL;

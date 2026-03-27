@@ -234,7 +234,7 @@ static struct octant *octant_cache_alloc(struct bvhtree *bvh,
 		__global struct octant *octants;
 
 		size = sizeof(*octants) * OCTANT_CACHE_SIZE;
-		octants = buf_allocate(scene->opencl, size);
+		octants = buf_allocate(scene->accel, size);
 		if (!octants)
 			return NULL;
 
@@ -426,7 +426,7 @@ int bvhtree_build(struct bvhtree *bvh, struct scene *scene)
 		return -EINVAL;
 
 	nr_triangles = scene->num_verts / 3;
-	leaves = buf_allocate(scene->opencl, nr_triangles * sizeof(*leaves));
+	leaves = buf_allocate(scene->accel, nr_triangles * sizeof(*leaves));
 	if (!leaves)
 		return -ENOMEM;
 

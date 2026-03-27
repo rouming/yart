@@ -1,21 +1,44 @@
 # YART
-YART is a just Yet Another Ray Tracer renderer boosted by OpenCL
-based on lessons from http://scratchapixel.com and http://pbr-book.org
+YART is a Yet Another Ray Tracer renderer that can be accelerated by OpenCL or CUDA.
+Based on lessons from http://scratchapixel.com and http://pbr-book.org
 
-The main goal is nothing but to learn ray tracing algorithms and
-implement C code which can be compiled on host and simultaneously
-compiled and loaded by OpenCL framework.
+The main goal is to learn ray tracing algorithms and implement C code that can be
+compiled on the host and simultaneously compiled and executed by an OpenCL or CUDA
+GPU framework.
 
-# HOWTO
+# Building
 
-Compilation is very simple: do just make.
+Three build targets are available, all producing a binary named `yart`.
 
-By default YART loads itself (yart.c source) as OpenCL program and the
-whole ray tracing is executed on GPU. In order to disable OpenCL
-accelaration --no-opencl option can be provided.
+**CUDA (default):**
+```
+make
+```
+or explicitly:
+```
+make yart-cuda
+```
+Requires CUDA toolkit (`nvcc`) and an NVIDIA GPU.
 
-When the scene is loaded and the window is opened you can observe with
-the mouse and walk with WASD keys.
+**OpenCL:**
+```
+make yart-opencl
+```
+Requires an OpenCL-capable GPU and the OpenCL runtime (`libOpenCL`).
+
+**CPU (no GPU acceleration):**
+```
+make yart-cpu
+```
+Runs entirely on the CPU. No GPU required.
+
+# Running
+
+By default YART uses GPU acceleration. To disable it and fall back to the CPU
+renderer, pass `--no-accel`.
+
+When the scene is loaded and the window is opened you can look around with the
+mouse and walk with the WASD keys.
 
 ## Example 1
 
@@ -130,7 +153,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
 ![Alt text](https://imgur.com/7Bkbgzzl.png)
 
 ```
-# Red ball, check plane under a point light
+# Red ball, checkered plane under a point light
 ./yart --object type=sphere,radius=0.3,pos=0,0.3,0,Ks=0.1,Kd=0.9,0.01,0.01 \
        --object type=plane,Ks=0.05,Kd=0.8,pattern=check \
        \
