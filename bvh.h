@@ -3,9 +3,7 @@
 
 #include "types.h"
 #include "math_3d.h"
-#include "memcache.h"
 #include "list.h"
-#include "rbtree.h"
 
 enum {
 	NR_PLANE_NORMALS = 7,
@@ -86,7 +84,6 @@ struct bvhtree_stat {
 struct bvhtree {
 	struct octant               root;
 	__global struct extent_leaf *leaves;
-	__global struct allocator   *alloc;
 	struct octant_cache         *octant_caches;
 	struct bvhtree_stat         stat;
 	uint32_t                    num_caches;
@@ -137,131 +134,76 @@ __accelerated static inline bool extent_intersect(const __global struct extent *
 	return true;
 }
 
-struct octant_elem {
-	struct rb_node entry;   /* entry in octant_queue->root */
+struct octant_queue_entry {
 	__global struct octant *octant;
 	float                   t;
+	uint32_t                _pad;
 };
 
 struct octant_queue {
-	struct memcache mc;
-	__global struct rb_root  *root;
+	__global struct octant_queue_entry *entries;
+	uint32_t count;
+	uint32_t max;
 };
 
-__accelerated static inline int octant_queue_init(struct octant_queue *queue,
-				    __global struct allocator *a)
+__accelerated static inline void octant_queue_init(struct octant_queue *queue,
+				    __global struct octant_queue_entry *entries,
+				    uint32_t max)
 {
-	int ret;
-
-	ret = memcache_init(&queue->mc, a, sizeof(struct octant_elem));
-	if (ret)
-		return ret;
-
-	queue->root = NULL;
-
-	return 0;
+	queue->entries = entries;
+	queue->count = 0;
+	queue->max = max;
 }
 
-__accelerated static inline int octant_queue_deinit(struct octant_queue *queue)
+__accelerated static inline void octant_queue_deinit(struct octant_queue *queue)
 {
-	__global struct octant_elem *elem;
-	__global struct rb_node *node;
-
-	if (!queue->root)
-		return 0;
-
-	/* Free queue node by node */
-	/*
-	 * Optimization hint: don't free node by node, but simply
-	 * free chunks, we don't care about proper queue tree elements
-	 * destruction, we care only about freeing allocator chunks.
-	 */
-	while ((node = rb_first(queue->root)) != NULL) {
-		rb_erase(node, queue->root);
-		elem = container_of(node, typeof(*elem), entry);
-		(void)memcache_free(&queue->mc, elem);
-	}
-	(void)memcache_free(&queue->mc, queue->root);
-
-	return memcache_deinit(&queue->mc);
+	(void)queue;
 }
 
 __accelerated static inline __global struct octant *
 octant_queue_pop_first(struct octant_queue *queue, float *t)
 {
-	__global struct octant_elem *elem;
 	__global struct octant *octant;
-	__global struct rb_node *node;
+	uint32_t i;
 
-	if (!queue->root || RB_EMPTY_ROOT(queue->root))
+	if (!queue->count)
 		return NULL;
 
-	node = rb_first(queue->root);
-	elem = container_of(node, typeof(*elem), entry);
-	*t = elem->t;
+	octant = queue->entries[0].octant;
+	*t = queue->entries[0].t;
 
-	rb_erase(node, queue->root);
-	octant = elem->octant;
-	memcache_free(&queue->mc, elem);
+	queue->count--;
+	for (i = 0; i < queue->count; i++)
+		queue->entries[i] = queue->entries[i + 1];
 
 	return octant;
-}
-
-__accelerated static float cmp_octants(__global const struct rb_node *a_,
-			 __global const struct rb_node *b_)
-{
-	__global struct octant_elem *a;
-	__global struct octant_elem *b;
-
-	a = container_of(a_, typeof(*a), entry);
-	b = container_of(b_, typeof(*b), entry);
-
-	return a->t - b->t;
 }
 
 __accelerated static inline int octant_queue_insert(struct octant_queue *queue,
 				      __global struct octant *octant,
 				      float t)
 {
-	__global struct rb_node * __global * this;
-	__global struct rb_node *parent = NULL;
-	__global struct octant_elem *elem;
-	__global struct rb_node *new;
-	float cmp;
+	uint32_t i, pos;
 
-	if (!queue->root) {
-		queue->root = (struct rb_root *)memcache_alloc(&queue->mc);
-		if (!queue->root)
-			return -ENOMEM;
-
-		*queue->root = RB_ROOT;
-	}
-	this = &queue->root->rb_node;
-
-	elem = (struct octant_elem *)memcache_alloc(&queue->mc);
-	if (!elem)
+	if (queue->count >= queue->max) {
+		assert(0);
 		return -ENOMEM;
-
-	elem->octant = octant;
-	elem->t = t;
-
-	new = &elem->entry;
-	while (*this) {
-		parent = *this;
-		cmp = cmp_octants(new, *this);
-
-		/*
-		 * Equal elements go to the right, i.e. FIFO order, thus '<',
-		 * if LIFO is needed then use '<='
-		 */
-		if (cmp < 0.0f)
-			this = &(*this)->rb_left;
-		else
-			this = &(*this)->rb_right;
 	}
-	/* Add new node to the tree and rebalance it */
-	rb_link_node(new, parent, this);
-	rb_insert_color(new, queue->root);
+
+	/*
+	 * Find insertion position: sorted ascending by t;
+	 * equal t goes after existing entries (FIFO order).
+	 */
+	for (pos = 0; pos < queue->count && queue->entries[pos].t <= t; pos++)
+		;
+
+	/* Shift entries up to make room */
+	for (i = queue->count; i > pos; i--)
+		queue->entries[i] = queue->entries[i - 1];
+
+	queue->entries[pos].octant = octant;
+	queue->entries[pos].t = t;
+	queue->count++;
 
 	return 0;
 }

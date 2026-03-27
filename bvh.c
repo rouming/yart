@@ -405,7 +405,6 @@ octree_build(struct bvhtree *bvh, struct scene *scene,
 #endif
 
 	bvh->leaves = leaves;
-	bvh->alloc = &scene->alloc;
 
 	return 0;
 }

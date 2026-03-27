@@ -4,7 +4,6 @@
 #include "types.h"
 #include "math_3d.h"
 #include "list.h"
-#include "alloc.h"
 #include "bvh.h"
 
 #define EPSILON	   1e-5
@@ -34,11 +33,6 @@ struct camera {
 struct accel;
 struct sdl;
 
-enum {
-	HEAP_SIZE  = 1<<30,
-	CHUNK_SIZE = 1<<10,
-};
-
 struct scene {
 	uint32_t dont_use_bvh;
 	uint32_t width;
@@ -49,12 +43,12 @@ struct scene {
 	float	 bias;
 	uint32_t ray_depth;
 	uint32_t samples_per_pixel;
+	uint32_t octant_queue_depth;
 	uint64_t num_verts;
 	struct camera cam;
-	__global struct rgba           *framebuffer;
-	__global struct ray_cast_state *ray_states;
-	__global void    *heap;
-	struct allocator alloc;
+	__global struct rgba                *framebuffer;
+	__global struct ray_cast_state      *ray_states;
+	__global struct octant_queue_entry  *bvh_queue;
 	struct bvhtree bvhtree;
 	struct accel *accel;
 	struct sdl    *sdl;

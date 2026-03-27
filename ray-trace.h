@@ -427,7 +427,9 @@ light_illuminate(__global struct light *light, const vec3_t *orig,
 __accelerated static inline bool bvhtree_intersect(__global const struct bvhtree *bvh,
 				     const vec3_t *orig, const vec3_t *dir,
 				     struct intersection *isect,
-				     enum ray_type ray_type)
+				     enum ray_type ray_type,
+				     __global struct octant_queue_entry *q_entries,
+				     uint32_t q_depth)
 {
 	__global const struct octant *octant;
 
@@ -455,11 +457,7 @@ __accelerated static inline bool bvhtree_intersect(__global const struct bvhtree
 		return false;
 	}
 
-	ret = octant_queue_init(&queue, bvh->alloc);
-	if (ret) {
-		assert(0);
-		return false;
-	}
+	octant_queue_init(&queue, q_entries, q_depth);
 
 	octant = &bvh->root;
 	t_octant = 0.0f;
@@ -518,8 +516,7 @@ __accelerated static inline bool bvhtree_intersect(__global const struct bvhtree
 	} while ((octant = octant_queue_pop_first(&queue, &t_octant)));
 
 out:
-	ret = octant_queue_deinit(&queue);
-	assert(!ret);
+	octant_queue_deinit(&queue);
 
 	return !!isect->hit_object;
 }
@@ -554,7 +551,8 @@ ray_intersect_objects(__global struct scene *scene, __global struct list_head *o
 
 __accelerated static inline bool
 ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
-	  struct intersection *isect, enum ray_type ray_type)
+	  struct intersection *isect, enum ray_type ray_type,
+	  __global struct octant_queue_entry *q_entries, uint32_t q_depth)
 {
 	isect->hit_object = NULL;
 	isect->near = INFINITY;
@@ -564,7 +562,8 @@ ray_trace(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 		ray_intersect_objects(scene, &scene->mesh_objects, orig, dir,
 				      isect, ray_type);
 	else
-		bvhtree_intersect(&scene->bvhtree, orig, dir, isect, ray_type);
+		bvhtree_intersect(&scene->bvhtree, orig, dir, isect, ray_type,
+				  q_entries, q_depth);
 
 	/* Trace other objects */
 	ray_intersect_objects(scene, &scene->notmesh_objects, orig, dir,
@@ -651,7 +650,8 @@ __accelerated static inline float fresnel(const vec3_t *I, const vec3_t *N, floa
 
 
 __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ray_cast_output *out,
-			      __global struct ray_cast_state *s)
+			      __global struct ray_cast_state *s,
+			      __global struct octant_queue_entry *q_entries, uint32_t q_depth)
 {
 	struct intersection isect;
 
@@ -675,7 +675,7 @@ __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ra
 	/* Update stat */
 	atomic64_inc(&in->scene->stat.rays);
 
-	hit = ray_trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY);
+	hit = ray_trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY, q_entries, q_depth);
 	if (!hit) {
 		out->color = in->scene->backcolor;
 		return false;
@@ -714,7 +714,7 @@ __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ra
 			rev_light_dir = v3_muls(light_dir, -1.0f);
 
 			obstacle = !!ray_trace(in->scene, &point, &rev_light_dir,
-					       &isect_shadow, SHADOW_RAY);
+					       &isect_shadow, SHADOW_RAY, q_entries, q_depth);
 			if (obstacle)
 				/* Light is not visible, object is hit, thus shadow */
 				continue;
@@ -842,7 +842,8 @@ rr_reflect_continue:
 
 __accelerated static inline vec3_t ray_cast(__global struct scene *scene,
 			      __global struct ray_cast_state *ray_states,
-			      const vec3_t *orig, const vec3_t *dir)
+			      const vec3_t *orig, const vec3_t *dir,
+			      __global struct octant_queue_entry *q_entries, uint32_t q_depth)
 {
 	__global struct ray_cast_state *s = ray_states;
 	struct ray_cast_input in = {
@@ -862,7 +863,7 @@ __accelerated static inline vec3_t ray_cast(__global struct scene *scene,
 	s->type = RAY_CAST_CALL;
 	depth = 0;
 	while (1) {
-		bool yielded = __ray_cast(&in, &out, s);
+		bool yielded = __ray_cast(&in, &out, s, q_entries, q_depth);
 		if (yielded) {
 			if (depth + 1 < scene->ray_depth) {
 				/* Take next state and prepare for call */
@@ -920,7 +921,9 @@ __accelerated static inline vec3_t ray_cast_for_pixel(__global struct scene *sce
 
 		ray_states_off = (iy * scene->width + ix) * scene->ray_depth;
 		ray_states = scene->ray_states + ray_states_off;
-		color = v3_add(color, ray_cast(scene, ray_states, orig, &dir));
+		color = v3_add(color, ray_cast(scene, ray_states, orig, &dir,
+					       scene->bvh_queue + (uint64_t)(iy * scene->width + ix) * scene->octant_queue_depth,
+					       scene->octant_queue_depth));
 	}
 	color = v3_divs(color, scene->samples_per_pixel);
 

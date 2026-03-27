@@ -483,6 +483,7 @@ enum {
 	OPT_BACKCOLOR,
 	OPT_RAY_DEPTH,
 	OPT_SAMPLES_PER_PIXEL,
+	OPT_OCTANT_QUEUE_DEPTH,
 
 	OPT_LIGHT,
 	OPT_OBJECT,
@@ -503,6 +504,8 @@ static struct option long_options[] = {
 	{"ray-depth", required_argument, 0, OPT_RAY_DEPTH},
 	{"samples-per-pixel",
 		      required_argument, 0, OPT_SAMPLES_PER_PIXEL},
+	{"octant-queue-depth",
+		      required_argument, 0, OPT_OCTANT_QUEUE_DEPTH},
 	{"light",     required_argument, 0, OPT_LIGHT},
 	{"object",    required_argument, 0, OPT_OBJECT},
 
@@ -1827,12 +1830,13 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 				  float cam_yaw, float fov,
 				  vec3_t backcolor, uint32_t ray_depth,
 				  uint32_t samples_per_pixel,
+				  uint32_t octant_queue_depth,
 				  bool no_bvh)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
 	struct ray_cast_state *ray_states;
-	void *heap;
+	struct octant_queue_entry *bvh_queue = NULL;
 	int ret;
 
 	/* Don't mmap by default */
@@ -1840,40 +1844,39 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 	assert(framebuffer);
 	ray_states = __buf_allocate(accel, width * height * ray_depth * sizeof(*ray_states), 0);
 	assert(ray_states);
-
-	heap = buf_allocate(accel, HEAP_SIZE);
-	assert(heap);
+	if (!no_bvh) {
+		bvh_queue = buf_allocate(accel, (uint64_t)width * height *
+					 octant_queue_depth * sizeof(*bvh_queue));
+		assert(bvh_queue);
+	}
 	scene = buf_allocate(accel, sizeof(*scene));
 	assert(scene);
 
 	*scene = (struct scene) {
-		.dont_use_bvh = no_bvh,
-		.width	      = width,
-		.height	      = height,
-		.fov	      = fov,
-		.backcolor    = backcolor,
-		.ray_depth    = ray_depth,
-		.samples_per_pixel
-			      = samples_per_pixel,
-		.c2w	      = m4_identity(),
-		.bias	      = 0.0001,
-		.accel	      = accel,
-		.framebuffer  = framebuffer,
-		.ray_states   = ray_states,
-		.heap         = heap,
-		.notmesh_objects
-			      = LIST_HEAD_INIT(scene->notmesh_objects),
-		.mesh_objects = LIST_HEAD_INIT(scene->mesh_objects),
-		.lights	      = LIST_HEAD_INIT(scene->lights),
+		.dont_use_bvh       = no_bvh,
+		.width		    = width,
+		.height		    = height,
+		.fov		    = fov,
+		.backcolor          = backcolor,
+		.ray_depth          = ray_depth,
+		.samples_per_pixel  = samples_per_pixel,
+		.octant_queue_depth = octant_queue_depth,
+		.c2w		    = m4_identity(),
+		.bias		    = 0.0001,
+		.accel		    = accel,
+		.framebuffer        = framebuffer,
+		.ray_states         = ray_states,
+		.bvh_queue          = bvh_queue,
+		.notmesh_objects    = LIST_HEAD_INIT(scene->notmesh_objects),
+		.mesh_objects       = LIST_HEAD_INIT(scene->mesh_objects),
+		.lights		    = LIST_HEAD_INIT(scene->lights),
 
 		.cam = {
-			.pos   = cam_pos,
+			.pos = cam_pos,
 		},
 	};
 	camera_set_angles(scene, cam_pitch, cam_yaw);
 	camera_update_c2w(scene);
-	ret = alloc_init(&scene->alloc, heap, HEAP_SIZE, CHUNK_SIZE, NO_FLAGS);
-	assert(!ret);
 	bvhtree_init(&scene->bvhtree);
 
 	if (!no_sdl) {
@@ -1886,15 +1889,11 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 
 static void scene_destroy(struct scene *scene)
 {
-	int ret;
-
 	sdl_deinit(scene);
 	bvhtree_deinit(&scene->bvhtree);
-	ret = alloc_deinit(&scene->alloc);
-	assert(!ret);
 	objects_destroy(scene);
 	lights_destroy(scene);
-	buf_destroy(scene->heap);
+	buf_destroy(scene->bvh_queue);
 	buf_destroy(scene->ray_states);
 	buf_destroy(scene->framebuffer);
 	buf_destroy(scene);
@@ -1934,11 +1933,6 @@ static int scene_finish(struct scene *scene)
 		if (ret)
 			return ret;
 	}
-
-	/* Unmap heap before render */
-	ret = buf_unmap(scene->heap);
-	if (ret)
-		return ret;
 
 	return buf_unmap(scene);
 }
@@ -1987,25 +1981,6 @@ static int scene_map_before_read(struct scene *scene)
 		return ret;
 	}
 
-	/* Map allocator and bitmap */
-	ret = __buf_map(scene->accel, &scene->alloc, sizeof(scene->alloc),
-			BUF_MAP_READ);
-	if (ret) {
-		fprintf(stderr, "Failed to map alloctor struct for reading\n");
-		buf_unmap(scene->framebuffer);
-		__buf_unmap(scene->accel, &scene->stat);
-		return ret;
-	}
-	ret = __buf_map(scene->accel, scene->alloc.free_bitmap,
-			scene->alloc.nbytes_bitmap, BUF_MAP_READ);
-	if (ret) {
-		fprintf(stderr, "Failed to map alloctor struct for reading\n");
-		buf_unmap(scene->framebuffer);
-		__buf_unmap(scene->accel, &scene->stat);
-		__buf_unmap(scene->accel, &scene->alloc);
-		return ret;
-	}
-
 	return 0;
 }
 
@@ -2013,10 +1988,6 @@ static void scene_unmap_after_read(struct scene *scene)
 {
 	int ret;
 
-	ret = __buf_unmap(scene->accel, &scene->alloc);
-	assert(!ret);
-	ret = __buf_unmap(scene->accel, scene->alloc.free_bitmap);
-	assert(!ret);
 	ret = __buf_unmap(scene->accel, &scene->stat);
 	assert(!ret);
 	ret = buf_unmap(scene->framebuffer);
@@ -2324,6 +2295,8 @@ static void usage(void)
 	       "   --ray-depth - number of ray casting depth, 5 is default\n"
 	       "   --samples-per-pixel\n"
 	       "               - multisample anti-aliasing technique, number of samples (rays) per a pixel, 4 is default\n"
+	       "   --octant-queue-depth\n"
+	       "               - max BVH octant queue entries per pixel, 32 is default; increase for deep/complex scenes\n"
 	       "\n"
 	       "   --light     - add light, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the light, 'distant' or 'point'\n"
@@ -2378,6 +2351,7 @@ int main(int argc, char **argv)
 	uint32_t height = 768;
 	uint32_t ray_depth = 5;
 	uint32_t samples_per_pixel = 4;
+	uint32_t octant_queue_depth = 32;
 
 	float cam_pitch = 0.0f;
 	float cam_yaw = 0.0f;
@@ -2471,6 +2445,14 @@ int main(int argc, char **argv)
 			}
 			break;
 		}
+		case OPT_OCTANT_QUEUE_DEPTH: {
+			ret = sscanf(optarg, "%u", &octant_queue_depth);
+			if (ret != 1 || !octant_queue_depth) {
+				fprintf(stderr, "Invalid --octant-queue-depth, unsigned int.\n");
+				return -EINVAL;
+			}
+			break;
+		}
 		case OPT_LIGHT:
 			/* See lights_create() */
 			break;
@@ -2495,7 +2477,7 @@ int main(int argc, char **argv)
 	/* Create scene */
 	scene = scene_create(accel, one_frame, width, height, cam_pos, cam_pitch,
 			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel,
-			     no_bvh);
+			     octant_queue_depth, no_bvh);
 	assert(scene);
 
 	/* Init default objects */
