@@ -35,6 +35,7 @@ struct sdl;
 
 struct scene {
 	uint32_t dont_use_bvh;
+	uint32_t use_path_tracing;
 	uint32_t width;
 	uint32_t height;
 	float	 fov;
@@ -95,6 +96,10 @@ enum material_type {
 	MATERIAL_PHONG,
 	MATERIAL_REFLECT,
 	MATERIAL_REFLECT_REFRACT,
+	/* Path tracing aliases */
+	MATERIAL_LAMBERTIAN = MATERIAL_PHONG,
+	MATERIAL_MIRROR     = MATERIAL_REFLECT,
+	MATERIAL_DIELECTRIC = MATERIAL_REFLECT_REFRACT,
 };
 
 enum pattern_type {

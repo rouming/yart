@@ -28,7 +28,11 @@ __global__ void render_cuda_kernel(struct scene *scene)
 	iy = i / scene->width;
 	ix = i % scene->width;
 
-	color = ray_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+	if (scene->use_path_tracing)
+		color = path_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+	else
+		color = ray_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+
 	color_vec_to_rgba32(&color, &scene->framebuffer[i]);
 }
 

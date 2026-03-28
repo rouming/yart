@@ -470,6 +470,7 @@ struct object_ops triangle_mesh_ops = {
 static int no_bvh;
 static int no_accel;
 static int one_frame;
+static int use_path_tracing;
 
 enum {
 	OPT_FOV = 'a',
@@ -494,6 +495,8 @@ static struct option long_options[] = {
 	{"no-accel",  no_argument,	 &no_accel, 1},
 	{"accel",     no_argument,	 &no_accel, 0},
 	{"one-frame", no_argument,	 &one_frame, 1},
+	{"path",      no_argument,	 &use_path_tracing, 1},
+	{"whitted",   no_argument,	 &use_path_tracing, 0},
 	{"fov",	      required_argument, 0, OPT_FOV},
 	{"width",     required_argument, 0, OPT_SCREEN_WIDTH},
 	{"height",    required_argument, 0, OPT_SCREEN_HEIGHT},
@@ -1061,10 +1064,16 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		case OBJECT_MATERIAL:
 			if (!strcmp(real_value, "phong"))
 				params->material = MATERIAL_PHONG;
+			else if (!strcmp(real_value, "lambertian"))
+				params->material = MATERIAL_LAMBERTIAN;
 			else if (!strcmp(real_value, "reflect"))
 				params->material = MATERIAL_REFLECT;
+			else if (!strcmp(real_value, "mirror"))
+				params->material = MATERIAL_MIRROR;
 			else if (!strcmp(real_value, "reflect-refract"))
 				params->material = MATERIAL_REFLECT_REFRACT;
+			else if (!strcmp(real_value, "dielectric"))
+				params->material = MATERIAL_DIELECTRIC;
 			else {
 				fprintf(stderr, "Unknown material specified\n");
 				return -EINVAL;
@@ -1831,7 +1840,7 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 				  vec3_t backcolor, uint32_t ray_depth,
 				  uint32_t samples_per_pixel,
 				  uint32_t octant_queue_depth,
-				  bool no_bvh)
+				  bool no_bvh, bool path_tracing)
 {
 	struct scene *scene;
 	struct rgba *framebuffer;
@@ -1854,6 +1863,7 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 
 	*scene = (struct scene) {
 		.dont_use_bvh       = no_bvh,
+		.use_path_tracing   = path_tracing,
 		.width		    = width,
 		.height		    = height,
 		.fov		    = fov,
@@ -1953,7 +1963,11 @@ static void render_soft(struct scene *scene)
 	pix = scene->framebuffer;
 	for (iy = 0; iy < scene->height; ++iy) {
 		for (ix = 0; ix < scene->width; ++ix) {
-			color = ray_cast_for_pixel(scene, &orig, ix, iy,
+			if (scene->use_path_tracing)
+				color = path_cast_for_pixel(scene, &orig, ix, iy,
+						    scale, img_ratio);
+			else
+				color = ray_cast_for_pixel(scene, &orig, ix, iy,
 						   scale, img_ratio);
 			color_vec_to_rgba32(&color, pix);
 			pix++;
@@ -2282,6 +2296,8 @@ static void usage(void)
 	       "\n"
 	       "OPTIONS:\n"
 	       "   --no-bvh     - don't use BVH tree, for debug purposes only\n"
+	       "   --path       - use path tracing renderer (default: Whitted)\n"
+	       "   --whitted    - use Whitted ray tracer renderer (default)\n"
 	       "   --no-accel   - no hardware acceleration\n"
 	       "   --one-frame  - render one frame and exit\n"
 	       "\n"
@@ -2313,7 +2329,7 @@ static void usage(void)
 	       "   --object    - add object, comma separated parameters should follow:\n"
 	       "                 'type'      - required parameter, specifies type of the object, 'mesh', 'sphere' or 'plane'\n"
 	       "                               can be specified\n"
-	       "                 'material'  - object material (shading), should be 'phong', 'reflect', 'reflect-refract'\n"
+	       "                 'material'  - object material: 'phong'/'lambertian', 'reflect'/'mirror', 'reflect-refract'/'dielectric'\n"
 	       "                 'rotate-x'\n"
 	       "                 'rotate-y'\n"
 	       "                 'rotate-z'  - rotate around axis by a give angle in degrees\n"
@@ -2479,7 +2495,7 @@ int main(int argc, char **argv)
 	/* Create scene */
 	scene = scene_create(accel, one_frame, width, height, cam_pos, cam_pitch,
 			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel,
-			     octant_queue_depth, no_bvh);
+			     octant_queue_depth, no_bvh, use_path_tracing);
 	assert(scene);
 
 	/* Init default objects */

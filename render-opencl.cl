@@ -1,9 +1,12 @@
+/*
+ * OpenCL kernel for YART ray tracer.
+*/
 #include "ray-trace.h"
 
 __kernel void render(__global struct scene *scene)
 {
-	float x, y, scale, img_ratio;
-	vec3_t orig, dir, color;
+	float scale, img_ratio;
+	vec3_t orig, color;
 	uint32_t i, ix, iy;
 
 	scale = tan(deg2rad(scene->fov * 0.5f));
@@ -16,6 +19,10 @@ __kernel void render(__global struct scene *scene)
 	iy = i / scene->width;
 	ix = i % scene->width;
 
-	color = ray_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+	if (scene->use_path_tracing)
+		color = path_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+	else
+		color = ray_cast_for_pixel(scene, &orig, ix, iy, scale, img_ratio);
+
 	color_vec_to_rgba32(&color, &scene->framebuffer[i]);
 }
