@@ -67,7 +67,136 @@ renderer, pass `--no-accel`.
 When the scene is loaded and the window is opened you can look around with the
 mouse and walk with the WASD keys.
 
-## Example 1
+## Rendering Modes
+
+YART implements two fundamentally different rendering algorithms selectable at
+runtime.
+
+### Whitted Ray Tracing (default)
+
+The default mode implements the algorithm introduced by Turner Whitted in 1980.
+It is a deterministic, recursive ray tracer:
+
+- At each surface hit, it shoots **shadow rays** to every light source to
+  determine visibility (hard shadows).
+- Reflective surfaces spawn one **mirror reflection ray**.
+- Transparent surfaces spawn one **refraction ray** (and one reflection ray
+  weighted by the Fresnel term).
+- Shading follows the **Phong model**: diffuse + specular highlights from each
+  light, summed analytically.
+
+Because every decision is deterministic, a single sample per pixel converges
+immediately to a clean image.  The trade-off is physical accuracy: Whitted
+tracing only models specular (mirror-like) light transport.  Soft shadows,
+color bleeding between surfaces, and realistic diffuse inter-reflections are
+not possible.  The scene must have at least one explicit light source
+(`--light`).
+
+### Path Tracing (--path)
+
+`--path` enables a physically based Monte Carlo renderer inspired by
+*Ray Tracing in One Weekend* (RTIOW).  Instead of making deterministic
+shading decisions, it traces **random walks**:
+
+- At each hit, one scatter direction is sampled stochastically from the
+  material's BRDF (cosine-weighted hemisphere for Lambertian surfaces,
+  perturbed mirror reflection for metals, stochastic Fresnel for glass).
+- The ray bounces until it escapes to the sky or is absorbed.  The sky color
+  (`--backcolor` / `--backcolor-horizon`) **is the light source** -- no
+  explicit lights are needed or used.
+- Many paths are averaged per pixel (`--samples-per-pixel`) to reduce noise.
+  Russian Roulette terminates low-contribution paths early to keep runtime
+  bounded.
+
+Because every light-transport effect emerges from the same random walk, path
+tracing naturally produces **soft shadows**, **color bleeding** (global
+illumination), **caustics**, and **depth of field** (`--defocus-angle` /
+`--focus-dist`).  The cost is that it requires many samples to converge:
+expect noise at low sample counts and clean images only after 32-256+ samples
+per pixel depending on scene complexity.
+
+| Property | Whitted (default) | Path Tracing (--path) |
+|---|---|---|
+| Shadows | Hard (shadow rays) | Soft (emerges from sampling) |
+| Diffuse inter-reflection | No | Yes |
+| Color bleeding | No | Yes |
+| Depth of field | No | Yes |
+| Light source | Explicit --light | --backcolor sky |
+| Samples needed | 1 | 32-256+ |
+| Convergence | Instant | Noisy then clean |
+
+## Example 1: RTIOW Final Scene (Path Tracing)
+
+The classic [Ray Tracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html)
+final scene: ~480 randomly placed small spheres of mixed materials on a ground
+sphere, three hero spheres, sky gradient, and camera depth of field.  Each run
+randomizes the small sphere placement.  Requires `bash` and `python3`.
+
+![RTIOW scene rendered with YART path tracer](https://i.imgur.com/tWfHoF5.png)
+
+```bash
+#!/usr/bin/env bash
+# RTIOW final scene: ground sphere + 3 hero spheres + 22x22 random small spheres.
+# Usage: bash YART-COMMANDS.txt
+#
+# Python generates one --object argument pair per line (flag then value) for
+# each small sphere.  mapfile reads them into an array so the shell passes
+# them as individual argv entries -- no eval, no word-splitting surprises.
+# No fixed seed: every run produces a different arrangement, matching RTIOW.
+
+mapfile -t objects < <(python3 - <<'PYEOF'
+import random, math
+
+for a in range(-11, 11):
+    for b in range(-11, 11):
+        cx = a + 0.9 * random.random()
+        cz = b + 0.9 * random.random()
+        cy = 0.2
+        # Skip spheres too close to the right hero sphere, as in RTIOW
+        if math.sqrt((cx - 4)**2 + cz**2) <= 0.9:
+            continue
+        m = random.random()
+        if m < 0.8:
+            # Lambertian: albedo = random * random (darker, more varied)
+            r = random.random() * random.random()
+            g = random.random() * random.random()
+            b = random.random() * random.random()
+            print('--object')
+            print(f'type=sphere,radius=0.2,pos={cx:.3f},{cy},{cz:.3f}'
+                  f',material=lambertian,Kd={r:.3f},{g:.3f},{b:.3f}')
+        elif m < 0.95:
+            # Mirror: albedo in [0.5, 1], fuzz in [0, 0.5]
+            r = 0.5 + 0.5 * random.random()
+            g = 0.5 + 0.5 * random.random()
+            b = 0.5 + 0.5 * random.random()
+            fz = 0.5 * random.random()
+            print('--object')
+            print(f'type=sphere,radius=0.2,pos={cx:.3f},{cy},{cz:.3f}'
+                  f',material=mirror,Kd={r:.3f},{g:.3f},{b:.3f},fuzz={fz:.3f}')
+        else:
+            # Dielectric glass
+            print('--object')
+            print(f'type=sphere,radius=0.2,pos={cx:.3f},{cy},{cz:.3f}'
+                  f',material=dielectric,ior=1.5')
+PYEOF
+)
+
+./yart --path \
+  --width 1200 --height 675 --fov 20 \
+  --pos 13,2,3 --pitch -8 --yaw -77 \
+  --backcolor 80b3ff --backcolor-horizon ffffff \
+  --defocus-angle 0.6 --focus-dist 10.0 \
+  --ray-depth 8 --samples-per-pixel 32 \
+  --object type=sphere,radius=1000,pos=0,-1000,0,Kd=0.5,0.5,0.5 \
+  --object type=sphere,radius=1,pos=0,1,0,material=dielectric,ior=1.5 \
+  --object type=sphere,radius=1,pos=-4,1,0,material=lambertian,Kd=0.4,0.2,0.1 \
+  --object type=sphere,radius=1,pos=4,1,0,material=mirror,Kd=0.7,0.6,0.5 \
+  "${objects[@]}"
+```
+
+## Whitted Ray Tracing Examples
+
+### Example 2
 
 ![Alt text](https://imgur.com/OkVEmeOl.png)
 
@@ -87,7 +216,7 @@ $ ./yart --object type=sphere,radius=0.3,pos=-3,1,0,Ks=0.05  \
          --pitch -10 --yaw -55 --pos 10,3,7
 ```
 
-## Example 2
+### Example 3
 
 ![Alt text](https://imgur.com/hjSiEJhl.png)
 
@@ -105,7 +234,7 @@ $ ./yart --object type=sphere,radius=0.8,pos=0,1,0,Ks=0.05 \
          --pos=0,1,8
 ```
 
-## Example 3
+### Example 4
 
 ![Alt text](https://imgur.com/af1RwmMl.png)
 
@@ -119,7 +248,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
          --pos 0,3,8  --pitch -13 --backcolor 3cacd7
 ```
 
-## Example 4
+### Example 5
 
 ![Alt text](https://imgur.com/8XFS3tdl.png)
 
@@ -133,7 +262,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --fov 27 --backcolor 3cacd7
 ```
 
-## Example 5
+### Example 6
 
 ![Alt text](https://imgur.com/5XI2wfdl.png)
 
@@ -146,7 +275,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pos 29,23,38 --pitch -19 --yaw -37.5
 ```
 
-## Example 6
+### Example 7
 
 ![Alt text](https://imgur.com/6Dc1fPPl.png)
 
@@ -160,7 +289,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pos 0,3,8 --pitch -13 --backcolor 3cacd7
 ```
 
-## Example 7
+### Example 8
 
 ![Alt text](https://imgur.com/MfAQdyil.png)
 
@@ -175,7 +304,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
         --pos 7,22,-30 --pitch -27 --yaw -164 --backcolor 3cacd7
 ```
 
-## Example 8
+### Example 9
 
 ![Alt text](https://imgur.com/7Bkbgzzl.png)
 
@@ -189,7 +318,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pitch -20 --yaw -5 --pos 0,2,5
 ```
 
-## Example 9
+### Example 10
 
 ![Alt text](https://imgur.com/I0n9iksl.png)
 
