@@ -6,6 +6,33 @@ The main goal is to learn ray tracing algorithms and implement C code that can b
 compiled on the host and simultaneously compiled and executed by an OpenCL or CUDA
 GPU framework.
 
+# Dependencies
+
+The following packages are required on Ubuntu/Debian:
+
+```
+sudo apt install build-essential libsdl2-dev libsdl2-ttf-dev libassimp-dev xxd
+```
+
+- `build-essential` -- GCC and standard build tools
+- `libsdl2-dev` -- SDL2 for window creation and input handling
+- `libsdl2-ttf-dev` -- SDL2 TTF extension for on-screen text (FPS counter, etc.)
+- `libassimp-dev` -- Assimp for loading 3D model files (.obj, .geo, etc.)
+- `xxd` -- used to embed the OpenCL kernel source as a C header at build time
+
+For OpenCL builds, also install the ICD loader and a platform runtime:
+
+```
+sudo apt install ocl-icd-opencl-dev
+```
+
+A platform-specific runtime is also needed: NVIDIA and AMD GPUs are covered by
+their proprietary drivers; for Intel GPUs install `intel-opencl-icd`; for a
+CPU-only OpenCL runtime install `pocl-opencl-icd`.
+
+For CUDA builds, install the CUDA toolkit from https://developer.nvidia.com/cuda-downloads
+(provides `nvcc` and `cuda_runtime.h`). The CUDA toolkit is not available via apt.
+
 # Building
 
 Three build targets are available, all producing a binary named `yart`.
