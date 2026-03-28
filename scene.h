@@ -36,12 +36,19 @@ struct sdl;
 struct scene {
 	uint32_t dont_use_bvh;
 	uint32_t use_path_tracing;
+	uint32_t sky_gradient;
 	uint32_t width;
 	uint32_t height;
 	float	 fov;
 	vec3_t	 backcolor;
+	vec3_t	 backcolor_horizon;
 	mat4_t	 c2w;
 	float	 bias;
+	uint32_t use_defocus;
+	float	 focus_dist;
+	float	 lens_radius;  /* focus_dist * tan(defocus_angle/2), precomputed */
+	vec3_t	 defocus_disk_u; /* right * lens_radius, updated on camera rotate */
+	vec3_t	 defocus_disk_v; /* up    * lens_radius, updated on camera rotate */
 	uint32_t ray_depth;
 	uint32_t samples_per_pixel;
 	uint32_t octant_queue_depth;

@@ -161,7 +161,7 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 			 * Ray escaped to the sky -- backcolor is the light source.
 			 * All accumulated attenuation flows back through the path.
 			 */
-			return v3_mul(attenuation, scene->backcolor);
+			return v3_mul(attenuation, scene_sky_color(scene, &ray_dir));
 		}
 
 		hit_point = v3_add(ray_orig, v3_muls(ray_dir, isect.near));
@@ -231,8 +231,26 @@ path_cast_for_pixel(__global struct scene *scene, const vec3_t *orig,
 		dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 		dir = v3_norm(dir);
 
+		vec3_t ray_orig = *orig;
+		if (scene->use_defocus) {
+			/*
+			 * Thin-lens defocus: jitter the ray origin on the lens
+			 * disk, redirect toward the focus point.  Disk sample
+			 * uses polar mapping for branch-free uniform coverage.
+			 */
+			float r  = sqrtf(path_rng_float(&rng));
+			float th = 2.0f * M_PI * path_rng_float(&rng);
+			vec3_t offset = v3_add(
+				v3_muls(scene->defocus_disk_u, r * cosf(th)),
+				v3_muls(scene->defocus_disk_v, r * sinf(th)));
+			vec3_t focus_pt = v3_add(*orig,
+				v3_muls(dir, scene->focus_dist));
+			ray_orig = v3_add(*orig, offset);
+			dir = v3_norm(v3_sub(focus_pt, ray_orig));
+		}
+
 		color = v3_add(color,
-		               path_cast(scene, orig, &dir,
+		               path_cast(scene, &ray_orig, &dir,
 		                         scene->bvh_queue +
 		                         (uint64_t)(iy * scene->width + ix) *
 		                         scene->octant_queue_depth,

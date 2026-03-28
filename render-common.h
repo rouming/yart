@@ -656,4 +656,20 @@ __accelerated static inline void color_vec_to_rgba32(const vec3_t *color, __glob
 	rgb->a = 255;
 }
 
+/*
+ * Sky color for a ray direction.  If sky_gradient is set, lerp from
+ * backcolor_horizon (at dir.y == -1) to backcolor (at dir.y == +1),
+ * matching the RTIOW gradient.  Otherwise return flat backcolor.
+ */
+__accelerated static inline vec3_t
+scene_sky_color(__global struct scene *scene, const vec3_t *dir)
+{
+	if (!scene->sky_gradient)
+		return scene->backcolor;
+
+	float t = 0.5f * (dir->y + 1.0f);
+	return v3_add(v3_muls(scene->backcolor_horizon, 1.0f - t),
+	              v3_muls(scene->backcolor, t));
+}
+
 #endif /* RENDER_COMMON_H */

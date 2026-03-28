@@ -31,7 +31,7 @@ __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ra
 
 	hit = ray_trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY, q_entries, q_depth);
 	if (!hit) {
-		out->color = in->scene->backcolor;
+		out->color = scene_sky_color(in->scene, &dir);
 		return false;
 	}
 
@@ -231,7 +231,7 @@ __accelerated static inline vec3_t ray_cast(__global struct scene *scene,
 				continue;
 			}
 			/* Maximum depth is reached */
-			out.color = scene->backcolor;
+			out.color = scene_sky_color(scene, &in.dir);
 
 			/* Pretend call is completed and fall through */
 		}
@@ -247,7 +247,7 @@ __accelerated static inline vec3_t ray_cast(__global struct scene *scene,
 	}
 
 	/* Unreachable line */
-	return scene->backcolor;
+	return scene_sky_color(scene, orig);
 }
 
 __accelerated static inline vec3_t ray_cast_for_pixel(__global struct scene *scene,
@@ -273,9 +273,23 @@ __accelerated static inline vec3_t ray_cast_for_pixel(__global struct scene *sce
 		dir = m4_mul_dir(scene->c2w, vec3(x, y, -1.0f));
 		dir = v3_norm(dir);
 
+		vec3_t ray_orig = *orig;
+		if (scene->use_defocus) {
+			/* Halton bases 5 and 7 for lens jitter (2 and 3 used for pixel) */
+			float r  = sqrtf(halton_seq(n, 5));
+			float th = 2.0f * M_PI * halton_seq(n, 7);
+			vec3_t offset = v3_add(
+				v3_muls(scene->defocus_disk_u, r * cosf(th)),
+				v3_muls(scene->defocus_disk_v, r * sinf(th)));
+			vec3_t focus_pt = v3_add(*orig,
+				v3_muls(dir, scene->focus_dist));
+			ray_orig = v3_add(*orig, offset);
+			dir = v3_norm(v3_sub(focus_pt, ray_orig));
+		}
+
 		ray_states_off = (iy * scene->width + ix) * scene->ray_depth;
 		ray_states = scene->ray_states + ray_states_off;
-		color = v3_add(color, ray_cast(scene, ray_states, orig, &dir,
+		color = v3_add(color, ray_cast(scene, ray_states, &ray_orig, &dir,
 					       scene->bvh_queue + (uint64_t)(iy * scene->width + ix) * scene->octant_queue_depth,
 					       scene->octant_queue_depth));
 	}

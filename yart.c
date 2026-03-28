@@ -482,6 +482,9 @@ enum {
 	OPT_CAM_POS,
 
 	OPT_BACKCOLOR,
+	OPT_BACKCOLOR_HORIZON,
+	OPT_DEFOCUS_ANGLE,
+	OPT_FOCUS_DIST,
 	OPT_RAY_DEPTH,
 	OPT_SAMPLES_PER_PIXEL,
 	OPT_OCTANT_QUEUE_DEPTH,
@@ -503,7 +506,10 @@ static struct option long_options[] = {
 	{"pitch",     required_argument, 0, OPT_CAM_PITCH},
 	{"yaw",	      required_argument, 0, OPT_CAM_YAW},
 	{"pos",	      required_argument, 0, OPT_CAM_POS},
-	{"backcolor", required_argument, 0, OPT_BACKCOLOR},
+	{"backcolor",         required_argument, 0, OPT_BACKCOLOR},
+	{"backcolor-horizon", required_argument, 0, OPT_BACKCOLOR_HORIZON},
+	{"defocus-angle",     required_argument, 0, OPT_DEFOCUS_ANGLE},
+	{"focus-dist",        required_argument, 0, OPT_FOCUS_DIST},
 	{"ray-depth", required_argument, 0, OPT_RAY_DEPTH},
 	{"samples-per-pixel",
 		      required_argument, 0, OPT_SAMPLES_PER_PIXEL},
@@ -1833,6 +1839,25 @@ static void camera_update_c2w(struct scene *scene)
 
 	ret = __buf_unmap(scene->accel, &scene->c2w);
 	assert(!ret);
+
+	if (scene->use_defocus) {
+		vec3_t right = m4_mul_dir(scene->c2w, vec3(1.0f, 0.0f, 0.0f));
+		vec3_t up    = m4_mul_dir(scene->c2w, vec3(0.0f, 1.0f, 0.0f));
+
+		ret = __buf_map(scene->accel, &scene->defocus_disk_u,
+				sizeof(scene->defocus_disk_u), BUF_MAP_WRITE);
+		assert(!ret);
+		scene->defocus_disk_u = v3_muls(right, scene->lens_radius);
+		ret = __buf_unmap(scene->accel, &scene->defocus_disk_u);
+		assert(!ret);
+
+		ret = __buf_map(scene->accel, &scene->defocus_disk_v,
+				sizeof(scene->defocus_disk_v), BUF_MAP_WRITE);
+		assert(!ret);
+		scene->defocus_disk_v = v3_muls(up, scene->lens_radius);
+		ret = __buf_unmap(scene->accel, &scene->defocus_disk_v);
+		assert(!ret);
+	}
 }
 
 static void camera_inc_angles(struct scene *scene, float inc_pitch, float inc_yaw)
@@ -1845,7 +1870,10 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 				  uint32_t width, uint32_t height,
 				  vec3_t cam_pos, float cam_pitch,
 				  float cam_yaw, float fov,
-				  vec3_t backcolor, uint32_t ray_depth,
+				  vec3_t backcolor, vec3_t backcolor_horizon,
+				  uint32_t sky_gradient,
+				  float defocus_angle, float focus_dist,
+				  uint32_t ray_depth,
 				  uint32_t samples_per_pixel,
 				  uint32_t octant_queue_depth,
 				  bool no_bvh, bool path_tracing)
@@ -1872,15 +1900,20 @@ static struct scene *scene_create(struct accel *accel, bool no_sdl,
 	*scene = (struct scene) {
 		.dont_use_bvh       = no_bvh,
 		.use_path_tracing   = path_tracing,
+		.sky_gradient       = sky_gradient,
 		.width		    = width,
 		.height		    = height,
 		.fov		    = fov,
 		.backcolor          = backcolor,
+		.backcolor_horizon  = backcolor_horizon,
 		.ray_depth          = ray_depth,
 		.samples_per_pixel  = samples_per_pixel,
 		.octant_queue_depth = octant_queue_depth,
 		.c2w		    = m4_identity(),
 		.bias		    = 0.0001,
+		.use_defocus        = defocus_angle > 0.0f ? 1 : 0,
+		.focus_dist         = focus_dist,
+		.lens_radius        = focus_dist * tanf(deg2rad(defocus_angle * 0.5f)),
 		.accel		    = accel,
 		.framebuffer        = framebuffer,
 		.ray_states         = ray_states,
@@ -2317,7 +2350,10 @@ static void usage(void)
 	       "   --yaw       - initial camera yaw angle in degrees (float)\n"
 	       "   --pos       - initial camera position in format x,y,z.\n"
 	       "                 e.g.: '--pos 0.0,1.0,12.0'\n"
-	       "   --backcolor - background color in hex, e.g. for red ff0000\n"
+	       "   --backcolor         - background/sky color in hex, e.g. for red ff0000\n"
+	       "   --backcolor-horizon - horizon color in hex; enables sky gradient\n"
+	       "   --defocus-angle     - lens aperture half-angle in degrees (0 = pinhole)\n"
+	       "   --focus-dist        - distance to the focus plane (default 10.0)\n"
 	       "   --ray-depth - number of ray casting depth, 5 is default\n"
 	       "   --samples-per-pixel\n"
 	       "               - multisample anti-aliasing technique, number of samples (rays) per a pixel, 4 is default\n"
@@ -2385,6 +2421,10 @@ int main(int argc, char **argv)
 	vec3_t cam_pos = vec3(0.0f, 2.0f, 16.0f);
 	float fov = 27.95f; /* 50mm focal lengh */
 	vec3_t backcolor = vec3(0.f, 0.f, 0.f);
+	vec3_t backcolor_horizon = vec3(0.f, 0.f, 0.f);
+	uint32_t sky_gradient = 0;
+	float defocus_angle = 0.0f;
+	float focus_dist = 10.0f;
 
 	int ret;
 
@@ -2452,6 +2492,35 @@ int main(int argc, char **argv)
 			backcolor.z = (color & 0xff) / 255.0f;
 			break;
 		}
+		case OPT_BACKCOLOR_HORIZON: {
+			uint32_t color;
+			ret = sscanf(optarg, "%x", &color);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid --backcolor-horizon, should be hex.\n");
+				return -EINVAL;
+			}
+			backcolor_horizon.x = ((color>>16) & 0xff) / 255.0f;
+			backcolor_horizon.y = ((color>>8) & 0xff) / 255.0f;
+			backcolor_horizon.z = (color & 0xff) / 255.0f;
+			sky_gradient = 1;
+			break;
+		}
+		case OPT_DEFOCUS_ANGLE: {
+			ret = sscanf(optarg, "%f", &defocus_angle);
+			if (ret != 1 || defocus_angle < 0.0f) {
+				fprintf(stderr, "Invalid --defocus-angle, non-negative float.\n");
+				return -EINVAL;
+			}
+			break;
+		}
+		case OPT_FOCUS_DIST: {
+			ret = sscanf(optarg, "%f", &focus_dist);
+			if (ret != 1 || focus_dist <= 0.0f) {
+				fprintf(stderr, "Invalid --focus-dist, positive float.\n");
+				return -EINVAL;
+			}
+			break;
+		}
 		case OPT_RAY_DEPTH: {
 			ret = sscanf(optarg, "%u", &ray_depth);
 			if (ret != 1) {
@@ -2503,7 +2572,9 @@ int main(int argc, char **argv)
 
 	/* Create scene */
 	scene = scene_create(accel, one_frame, width, height, cam_pos, cam_pitch,
-			     cam_yaw, fov, backcolor, ray_depth, samples_per_pixel,
+			     cam_yaw, fov, backcolor, backcolor_horizon,
+			     sky_gradient, defocus_angle, focus_dist,
+			     ray_depth, samples_per_pixel,
 			     octant_queue_depth, no_bvh, use_path_tracing);
 	assert(scene);
 
