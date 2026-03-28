@@ -47,6 +47,17 @@ path_build_onb(const vec3_t *n, vec3_t *t, vec3_t *b)
 	*b = v3_cross(*n, *t);
 }
 
+/* Random point on the unit sphere -- used for mirror fuzz perturbation */
+__accelerated static inline vec3_t path_random_on_sphere(uint32_t *rng)
+{
+	float theta = 2.0f * M_PI * path_rng_float(rng);
+	float phi   = acosf(1.0f - 2.0f * path_rng_float(rng));
+
+	return vec3(sinf(phi) * cosf(theta),
+	            sinf(phi) * sinf(theta),
+	            cosf(phi));
+}
+
 /*
  * Cosine-weighted hemisphere sample around 'normal'.
  * PDF = cos(theta)/pi; for lambertian BRDF = Kd/pi the
@@ -86,9 +97,13 @@ path_scatter(__global struct object *obj, const vec3_t *dir,
 		return true;
 	}
 	case MATERIAL_MIRROR: {
-		*scatter_dir = reflect(dir, hit_normal);
+		vec3_t r = reflect(dir, hit_normal);
+
+		if (obj->fuzz > 0.0f)
+			r = v3_add(r, v3_muls(path_random_on_sphere(rng), obj->fuzz));
+		*scatter_dir = v3_norm(r);
 		*attenuation = obj->Kd;
-		/* Degenerate if reflected ray points into the surface */
+		/* Absorbed if fuzz kicked the ray below the surface */
 		return v3_dot(*scatter_dir, *hit_normal) > 0.0f;
 	}
 	case MATERIAL_DIELECTRIC: {

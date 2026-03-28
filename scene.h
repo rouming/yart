@@ -149,7 +149,8 @@ struct object {
 	vec3_t Kd;  /* diffuse weight for each RGB channel */
 	vec3_t Ks;  /* specular weight for each RGB channel */
 	float  n;   /* specular exponent */
-	float  r;   /* reflection coef */
+	float  r;    /* reflection coef */
+	float  fuzz; /* mirror reflection fuzz (0 = perfect mirror, 1 = max blur) */
 };
 
 struct sphere {

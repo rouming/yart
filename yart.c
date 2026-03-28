@@ -530,6 +530,7 @@ enum {
 	OBJECT_KS,
 	OBJECT_N,
 	OBJECT_R,
+	OBJECT_FUZZ,
 	OBJECT_MESH_FILE,
 	OBJECT_MESH_SMOOTH_SHADING,
 	OBJECT_SPHERE_RADIUS,
@@ -553,6 +554,7 @@ static char *const object_token[] = {
 	[OBJECT_KS]	       = "Ks",
 	[OBJECT_N]	       = "n",
 	[OBJECT_R]	       = "r",
+	[OBJECT_FUZZ]	       = "fuzz",
 	[OBJECT_MESH_FILE]     = "file",
 	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
 	[OBJECT_SPHERE_RADIUS] = "radius",
@@ -574,6 +576,7 @@ struct object_params {
 	vec3_t Ks;
 	float  n;
 	float  r;
+	float  fuzz;
 	struct {
 		char  file[512];
 		bool  smooth_shading;
@@ -603,6 +606,7 @@ static void default_object_params(struct object_params *params)
 	params->Ks = vec3(0.2f, 0.2f, 0.2f);
 	params->n = 10.0f;
 	params->r = 0.0f;
+	params->fuzz = 0.0f;
 	params->sphere.radius = 0.5f;
 	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
 	params->plane.normal = vec3(0.0f, 1.0f, 0.0f);
@@ -625,6 +629,7 @@ static void object_init(struct object *obj, const struct object_ops *ops,
 	obj->Ks = params->Ks;
 	obj->n = params->n;
 	obj->r = params->r;
+	obj->fuzz = params->fuzz;
 }
 
 static void sphere_set_radius(struct sphere *sphere, float radius)
@@ -1197,6 +1202,9 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			break;
 		case OBJECT_R:
 			fptr = &params->r;
+			break;
+		case OBJECT_FUZZ:
+			fptr = &params->fuzz;
 			break;
 		case OBJECT_SPHERE_RADIUS:
 			fptr = &params->sphere.radius;
@@ -2344,6 +2352,7 @@ static void usage(void)
 	       "                 'Ks'     - specular weight, accepts float or float,float,float\n"
 	       "                 'n'      - specular exponent\n"
 	       "                 'r'      - reflection coefficient, accepts float\n"
+	       "                 'fuzz'   - mirror reflection blur radius [0..1], path tracing only\n"
 	       "                Sphere:\n"
 	       "                 'radius' - sphere radius\n"
 	       "                 'pos'    - spehere position\n"
