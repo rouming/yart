@@ -2028,31 +2028,33 @@ static void one_frame_render(struct scene *scene)
 	scene_unmap_after_read(scene);
 }
 
-/**
- * Welford's online algorithm
- * https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+/*
+ * 1-pole IIR low-pass filter (exponential moving average).
+ * alpha controls the smoothing: ~1/alpha frames of memory.
+ * The first sample seeds the filter directly to avoid a
+ * ramp-up from zero.
  */
-struct welford_state {
-	uint64_t count;
-	float mean, m2;
+#define EMA_ALPHA 0.1f
+
+struct ema_state {
+	float value;
+	int   seeded;
 };
 
-static float avg_welford(struct welford_state *s, float new_value)
+static float ema(struct ema_state *s, float new_value)
 {
-	float delta, delta2;
-
-	s->count += 1;
-	delta = new_value - s->mean;
-	s->mean += delta / s->count;
-	delta2 = new_value - s->mean;
-	s->m2 += delta * delta2;
-
-	return s->mean;
+	if (!s->seeded) {
+		s->value = new_value;
+		s->seeded = 1;
+	} else {
+		s->value += EMA_ALPHA * (new_value - s->value);
+	}
+	return s->value;
 }
 
 static const char *scene_average_rays(struct scene *scene)
 {
-	static struct welford_state s;
+	static struct ema_state s;
 	static uint64_t render_ns;
 	static char buf[32];
 	static uint64_t rays;
@@ -2061,7 +2063,7 @@ static const char *scene_average_rays(struct scene *scene)
 	if (render_ns) {
 		rps = 1000000000.0f / (nsecs() - render_ns) *
 			(scene->stat.rays - rays);
-		rps = avg_welford(&s, rps);
+		rps = ema(&s, rps);
 
 		if (rps > 1e6)
 			snprintf(buf, sizeof(buf), "%5.0fM", rps/1e6);
@@ -2081,13 +2083,13 @@ static const char *scene_average_rays(struct scene *scene)
 
 static float scene_average_fps(struct scene *scene)
 {
-	static struct welford_state s;
+	static struct ema_state s;
 	static uint64_t render_ns;
 	float fps = 0;
 
 	if (render_ns) {
 		fps = 1000000000.0f / (nsecs() - render_ns);
-		fps = avg_welford(&s, fps);
+		fps = ema(&s, fps);
 	}
 	render_ns = nsecs();
 
