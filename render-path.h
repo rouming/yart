@@ -208,6 +208,20 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 				                                 pattern *
 				                                 isect.hit_object->albedo *
 				                                 cos_theta)));
+
+				/* Phong specular highlight */
+				if (isect.hit_object->n > 0.0f) {
+					vec3_t R       = reflect(&light_dir, &hit_normal);
+					vec3_t rev_dir = v3_muls(ray_dir, -1.0f);
+					float  spec    = powf(MAX(0.0f, v3_dot(R, rev_dir)),
+					                      isect.hit_object->n);
+					if (spec > 0.0f)
+						radiance = v3_add(radiance,
+						                  v3_mul(attenuation,
+						                         v3_muls(v3_mul(light_intensity,
+						                                        isect.hit_object->Ks),
+						                                 spec)));
+				}
 			}
 		}
 
