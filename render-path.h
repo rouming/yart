@@ -137,12 +137,17 @@ path_scatter(__global struct object *obj, const vec3_t *dir,
  * The loop is flat -- no recursion, no yield/resume state machine needed.
  * Terminates on: sky miss, ray absorbed by material, Russian Roulette, or
  * max depth (scene->ray_depth).
+ *
+ * Next-Event Estimation (NEE): at each Lambertian bounce we explicitly sample
+ * scene lights and add their direct contribution, matching the Whitted diffuse
+ * formula (Kd * albedo * pattern * cos_theta * light_intensity).
  */
 __accelerated static inline vec3_t
 path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
           __global struct octant_queue_entry *q_entries, uint32_t q_depth,
           uint32_t *rng)
 {
+	vec3_t radiance    = vec3(0.0f, 0.0f, 0.0f);
 	vec3_t attenuation = vec3(1.0f, 1.0f, 1.0f);
 	vec3_t ray_orig    = *orig;
 	vec3_t ray_dir     = *dir;
@@ -158,16 +163,53 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 		if (!ray_trace(scene, &ray_orig, &ray_dir, &isect, PRIMARY_RAY,
 		               q_entries, q_depth)) {
 			/*
-			 * Ray escaped to the sky -- backcolor is the light source.
+			 * Ray escaped to the sky -- add sky contribution and stop.
 			 * All accumulated attenuation flows back through the path.
 			 */
-			return v3_mul(attenuation, scene_sky_color(scene, &ray_dir));
+			return v3_add(radiance,
+			              v3_mul(attenuation,
+			                     scene_sky_color(scene, &ray_dir)));
 		}
 
 		hit_point = v3_add(ray_orig, v3_muls(ray_dir, isect.near));
 		object_get_surface_props(isect.hit_object, &hit_point, &ray_dir,
 		                         isect.index, &isect.uv,
 		                         &hit_normal, &hit_tex_coords);
+
+		/* NEE: direct lighting for Lambertian surfaces */
+		if (isect.hit_object->material == MATERIAL_LAMBERTIAN) {
+			__global struct light *light;
+			struct intersection shadow_isect;
+
+			list_for_each_entry(light, &scene->lights, entry) {
+				vec3_t light_dir, light_intensity, to_light, shadow_orig;
+				float light_dist, cos_theta, pattern;
+
+				light_illuminate(light, &hit_point, &light_dir,
+				                 &light_intensity, &light_dist);
+				to_light = v3_muls(light_dir, -1.0f);
+				cos_theta = v3_dot(hit_normal, to_light);
+				if (cos_theta <= 0.0f)
+					continue;
+
+				shadow_orig = v3_add(hit_point,
+				                     v3_muls(hit_normal, scene->bias));
+				if (ray_trace(scene, &shadow_orig, &to_light,
+				              &shadow_isect, SHADOW_RAY,
+				              q_entries, q_depth))
+					continue;
+
+				pattern = object_pattern(isect.hit_object,
+				                         &hit_tex_coords);
+				radiance = v3_add(radiance,
+				                  v3_mul(attenuation,
+				                         v3_muls(v3_mul(light_intensity,
+				                                        isect.hit_object->Kd),
+				                                 pattern *
+				                                 isect.hit_object->albedo *
+				                                 cos_theta)));
+			}
+		}
 
 		/*
 		 * Russian Roulette: after a few bounces start randomly
@@ -178,13 +220,13 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 			float p = MAX(attenuation.x,
 			              MAX(attenuation.y, attenuation.z));
 			if (path_rng_float(rng) > p)
-				return vec3(0.0f, 0.0f, 0.0f);
+				return radiance;
 			attenuation = v3_divs(attenuation, p);
 		}
 
 		if (!path_scatter(isect.hit_object, &ray_dir, &hit_normal, rng,
 		                  &attn, &scatter_dir))
-			return vec3(0.0f, 0.0f, 0.0f);
+			return radiance;
 
 		attenuation = v3_mul(attenuation, attn);
 
@@ -201,7 +243,7 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 	}
 
 	/* Exhausted max depth */
-	return vec3(0.0f, 0.0f, 0.0f);
+	return radiance;
 }
 
 /*
