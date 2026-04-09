@@ -92,6 +92,12 @@ path_scatter(__global struct object *obj, const vec3_t *dir,
 {
 	switch (obj->material) {
 	case MATERIAL_LAMBERTIAN: {
+		if (obj->r > 0.0f && path_rng_float(rng) < obj->r) {
+			/* Stochastic reflection -- chosen with probability r */
+			*scatter_dir = reflect(dir, hit_normal);
+			*attenuation = obj->Kd;
+			return v3_dot(*scatter_dir, *hit_normal) > 0.0f;
+		}
 		*scatter_dir = path_cosine_sample(hit_normal, rng);
 		*attenuation = obj->Kd;
 		return true;
