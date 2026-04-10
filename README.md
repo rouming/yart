@@ -125,7 +125,41 @@ per pixel depending on scene complexity.
 | Samples needed | 1 | 32-256+ |
 | Convergence | Instant | Noisy then clean |
 
-## Example 1: RTIOW Final Scene (Path Tracing)
+## Example 1: Black Hole (whitted tracing)
+
+Three colored spheres (blue, green, red) are placed far behind a black hole,
+with a checkered plane as the ground.  From the camera's viewpoint the black
+hole sits almost exactly in front of the blue sphere, producing an
+**Einstein ring**: rays that would normally miss the blue sphere are bent by
+gravity around all sides of the black hole and redirected toward the camera,
+so the blue sphere appears as a luminous ring encircling the dark event
+horizon.  The green and red spheres are off-axis and show up as ordinary
+lensed smears rather than rings.
+
+The event horizon itself is visible as a black disc -- rays that cross the
+Schwarzschild radius (RS = 2*mass) are absorbed and return no color.
+Gravitational redshift dims the blue and green channels of light that passes
+close to the horizon, so objects seen through the inner lensing region shift
+toward red.
+
+![Black Hole](https://i.imgur.com/LYOr6LL.png)
+
+```
+./yart --object type=sphere,radius=0.6,pos=-12,1.3,-13,Kd=0,0,1,Ks=0.05 \
+       --object type=sphere,radius=0.6,pos=-12,1.3,-10,Kd=0,1,0,Ks=0.05 \
+       --object type=sphere,radius=0.6,pos=-12,1.3,-16,Kd=1,0,0,Ks=0.05 \
+       \
+       --object type=blackhole,pos=-3,2,-5,mass=0.2,step=0.05,maxsteps=1000,escape=80,colorshift=10 \
+       \
+       --object type=plane,Ks=0.05,Kd=0.8,pattern=check \
+       \
+       --light dir=-0.4,-0.8,0.3,type=distant,intensity=7 \
+       \
+       --backcolor 3cacd7 \
+       --pitch -5 --yaw -49 --pos 6,3,3
+```
+
+## Example 2: RTIOW Final Scene (path tracing)
 
 The classic [Ray Tracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html)
 final scene: ~480 randomly placed small spheres of mixed materials on a ground
@@ -194,9 +228,7 @@ PYEOF
   "${objects[@]}"
 ```
 
-## Whitted Ray Tracing Examples
-
-### Example 2
+### Example 3 (whitted tracing)
 
 ![Alt text](https://imgur.com/OkVEmeOl.png)
 
@@ -216,7 +248,7 @@ $ ./yart --object type=sphere,radius=0.3,pos=-3,1,0,Ks=0.05  \
          --pitch -10 --yaw -55 --pos 10,3,7
 ```
 
-### Example 3
+### Example 4 (whitted tracing)
 
 ![Alt text](https://imgur.com/hjSiEJhl.png)
 
@@ -234,7 +266,7 @@ $ ./yart --object type=sphere,radius=0.8,pos=0,1,0,Ks=0.05 \
          --pos=0,1,8
 ```
 
-### Example 4
+### Example 5 (whitted tracing)
 
 ![Alt text](https://imgur.com/af1RwmMl.png)
 
@@ -248,7 +280,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
          --pos 0,3,8  --pitch -13 --backcolor 3cacd7
 ```
 
-### Example 5
+### Example 6 (whitted tracing)
 
 ![Alt text](https://imgur.com/8XFS3tdl.png)
 
@@ -262,7 +294,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --fov 27 --backcolor 3cacd7
 ```
 
-### Example 6
+### Example 7 (whitted tracing)
 
 ![Alt text](https://imgur.com/5XI2wfdl.png)
 
@@ -275,7 +307,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pos 29,23,38 --pitch -19 --yaw -37.5
 ```
 
-### Example 7
+### Example 8 (whitted tracing)
 
 ![Alt text](https://imgur.com/6Dc1fPPl.png)
 
@@ -289,7 +321,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pos 0,3,8 --pitch -13 --backcolor 3cacd7
 ```
 
-### Example 8
+### Example 9 (whitted tracing)
 
 ![Alt text](https://imgur.com/MfAQdyil.png)
 
@@ -304,7 +336,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
         --pos 7,22,-30 --pitch -27 --yaw -164 --backcolor 3cacd7
 ```
 
-### Example 9
+### Example 10 (whitted tracing)
 
 ![Alt text](https://imgur.com/7Bkbgzzl.png)
 
@@ -318,7 +350,7 @@ $ ./yart --object type=mesh,file=./models/glasses.geo,material=reflect-refract,i
        --pitch -20 --yaw -5 --pos 0,2,5
 ```
 
-### Example 10
+### Example 11 (whitted tracing)
 
 ![Alt text](https://imgur.com/I0n9iksl.png)
 
