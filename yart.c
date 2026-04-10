@@ -52,7 +52,8 @@ extern void cuda_invoke(struct scene *scene);
 #endif
 #include "buf.h"
 
-#define MOVE_SPEED 0.03f
+#define MOUSE_SPEED 0.09f
+#define KEYS_SPEED  0.30f
 
 #ifdef USE_OPENCL
 struct accel {
@@ -2387,32 +2388,32 @@ static void render(struct scene *scene)
 
 		/* Handle mouse movement */
 		if (mouse.y && mouse.x) {
-			camera_inc_angles(scene, -mouse.y * MOVE_SPEED,
-					  mouse.x * MOVE_SPEED);
+			camera_inc_angles(scene, -mouse.y * MOUSE_SPEED,
+					  mouse.x * MOUSE_SPEED);
 			updated_cam = true;
 		}
 
 		/* Handle keyboard */
 		if (keyb[SDL_SCANCODE_W]) {
-			cam->pos = v3_add(cam->pos, v3_muls(cam->dir, MOVE_SPEED));
+			cam->pos = v3_add(cam->pos, v3_muls(cam->dir, KEYS_SPEED));
 			updated_cam = true;
 		}
 		else if (keyb[SDL_SCANCODE_S]) {
-			cam->pos = v3_sub(cam->pos, v3_muls(cam->dir, MOVE_SPEED));
+			cam->pos = v3_sub(cam->pos, v3_muls(cam->dir, KEYS_SPEED));
 			updated_cam = true;
 		}
 		if (keyb[SDL_SCANCODE_A]) {
 			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
 			vec3_t right = v3_cross(cam->dir, up);
 
-			cam->pos = v3_sub(cam->pos, v3_muls(right, MOVE_SPEED));
+			cam->pos = v3_sub(cam->pos, v3_muls(right, KEYS_SPEED));
 			updated_cam = true;
 		}
 		else if (keyb[SDL_SCANCODE_D]) {
 			vec3_t up = vec3(0.0f, 1.0f, 0.0f);
 			vec3_t right = v3_cross(cam->dir, up);
 
-			cam->pos = v3_add(cam->pos, v3_muls(right, MOVE_SPEED));
+			cam->pos = v3_add(cam->pos, v3_muls(right, KEYS_SPEED));
 			updated_cam = true;
 		}
 
