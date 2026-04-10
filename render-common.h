@@ -338,6 +338,9 @@ object_intersect(__global struct object *obj, const vec3_t *orig,
 		return plane_intersect(obj, orig, dir, near, index, uv);
 	case MESH_OBJECT:
 		return triangle_mesh_intersect(obj, orig, dir, near, index, uv);
+	case BLACKHOLE_OBJECT:
+		/* Never intersected directly -- handled by blackhole_march */
+		return false;
 	default:
 		/* Hm .. */
 		printf("%s: unknown object %d\n", __func__, obj->type);
@@ -368,6 +371,9 @@ object_get_surface_props(__global struct object *obj, const vec3_t *hit_point,
 	case MESH_OBJECT:
 		triangle_mesh_get_surface_props(obj, hit_point, dir, index,
 						uv, hit_normal, hit_tex_coords);
+		return;
+	case BLACKHOLE_OBJECT:
+		/* Never called -- event horizon hits are handled before surface eval */
 		return;
 	default:
 		/* Hm .. */

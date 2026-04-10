@@ -166,15 +166,30 @@ path_cast(__global struct scene *scene, const vec3_t *orig, const vec3_t *dir,
 
 		atomic64_inc(&scene->stat.rays);
 
-		if (!ray_trace(scene, &ray_orig, &ray_dir, &isect, PRIMARY_RAY,
-		               q_entries, q_depth)) {
-			/*
-			 * Ray escaped to the sky -- add sky contribution and stop.
-			 * All accumulated attenuation flows back through the path.
-			 */
-			return v3_add(radiance,
-			              v3_mul(attenuation,
-			                     scene_sky_color(scene, &ray_dir)));
+		{
+			float bh_z = 1.0f, bh_strength = 0.0f;
+			bool hit = scene->num_blackholes
+				? blackhole_march(scene, &ray_orig, &ray_dir,
+				                  &isect, q_entries, q_depth,
+				                  &bh_z, &bh_strength)
+				: ray_trace(scene, &ray_orig, &ray_dir, &isect,
+				            PRIMARY_RAY, q_entries, q_depth);
+
+			if (!hit) {
+				/*
+				 * Ray escaped to the sky -- apply the colour
+				 * shift to the sky sample directly so spectral
+				 * cross-talk works on the actual RGB values, then
+				 * fold accumulated attenuation and stop.
+				 */
+				vec3_t sky = v3_mul(attenuation,
+				                    scene_sky_color(scene, &ray_dir));
+				apply_color_shift(&sky, bh_z, bh_strength);
+				return v3_add(radiance, sky);
+			}
+			if (isect.hit_object->type == BLACKHOLE_OBJECT)
+				/* Ray absorbed by event horizon */
+				return radiance;
 		}
 
 		hit_point = v3_add(ray_orig, v3_muls(ray_dir, isect.near));

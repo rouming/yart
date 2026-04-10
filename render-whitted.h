@@ -11,6 +11,7 @@ __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ra
 
 	vec3_t hit_point, hit_normal, hit_color, dir = in->dir;
 	vec3_t refract_color, reflect_color;
+	float bh_z = 1.0f, bh_strength = 0.0f; /* colour shift params; init here so yield/resume paths get no-op */
 	vec2_t hit_tex_coords;
 	bool hit;
 
@@ -29,9 +30,20 @@ __accelerated static inline bool __ray_cast(struct ray_cast_input *in, struct ra
 	/* Update stat */
 	atomic64_inc(&in->scene->stat.rays);
 
-	hit = ray_trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY, q_entries, q_depth);
+	bh_z = 1.0f; bh_strength = 0.0f;
+	hit = in->scene->num_blackholes
+		? blackhole_march(in->scene, &in->orig, &dir, &isect,
+		                  q_entries, q_depth, &bh_z, &bh_strength)
+		: ray_trace(in->scene, &in->orig, &dir, &isect, PRIMARY_RAY,
+		            q_entries, q_depth);
 	if (!hit) {
 		out->color = scene_sky_color(in->scene, &dir);
+		apply_color_shift(&out->color, bh_z, bh_strength);
+		return false;
+	}
+	if (isect.hit_object->type == BLACKHOLE_OBJECT) {
+		/* Ray absorbed by event horizon -- black regardless of shift */
+		out->color = vec3(0.0f, 0.0f, 0.0f);
 		return false;
 	}
 
@@ -191,6 +203,7 @@ rr_reflect_continue:
 	}
 
 	out->color = hit_color;
+	apply_color_shift(&out->color, bh_z, bh_strength);
 	return false;
 }
 

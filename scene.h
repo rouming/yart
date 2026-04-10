@@ -61,6 +61,8 @@ struct scene {
 	struct accel *accel;
 	struct sdl    *sdl;
 
+	uint32_t num_blackholes; /* > 0 enables curved ray marching in both renderers */
+
 	struct list_head mesh_objects;
 	struct list_head notmesh_objects;
 	struct list_head lights;
@@ -142,6 +144,7 @@ enum object_type {
 	SPHERE_OBJECT,
 	PLANE_OBJECT,
 	MESH_OBJECT,
+	BLACKHOLE_OBJECT,
 };
 
 struct object {
@@ -179,6 +182,17 @@ struct plane {
 	/* Basis on 3D plane to make UV mapping */
 	vec3_t b1;
 	vec3_t b2;
+};
+
+struct blackhole {
+	struct object obj;
+	vec3_t   center;      /* position in world space */
+	float    mass;        /* M, with G=1: a = M/r^2 */
+	float    RS;          /* Schwarzschild radius = 2*G*M = 2*M (precomputed) */
+	float    DT;               /* Euler integration step size */
+	float    escape_dist;      /* ray travel distance beyond which it is free */
+	float    colorshift_strength;/* 0 = no shift, 1 = physical, >1 = artistic */
+	uint32_t max_steps;        /* upper bound on integration steps */
 };
 
 struct triangle_mesh {

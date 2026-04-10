@@ -441,6 +441,46 @@ struct object_ops plane_ops = {
 	.get_surface_props	= plane_get_surface_props,
 };
 
+static void blackhole_destroy(struct object *obj)
+{
+	struct blackhole *bh = container_of(obj, struct blackhole, obj);
+
+	buf_destroy(bh);
+}
+
+static int blackhole_unmap(struct object *obj)
+{
+	struct blackhole *bh = container_of(obj, struct blackhole, obj);
+
+	return buf_unmap(bh);
+}
+
+/* Never intersected via normal ray_trace -- blackhole_march handles it */
+static bool blackhole_intersect_nop(__global struct object *obj,
+				    const vec3_t *orig, const vec3_t *dir,
+				    float *near, uint32_t *index, vec2_t *uv)
+{
+	(void)obj; (void)orig; (void)dir; (void)near; (void)index; (void)uv;
+	return false;
+}
+
+static void blackhole_surface_props_nop(__global struct object *obj,
+					const vec3_t *hit_point,
+					const vec3_t *dir, uint32_t index,
+					const vec2_t *uv, vec3_t *hit_normal,
+					vec2_t *hit_tex_coords)
+{
+	(void)obj; (void)hit_point; (void)dir; (void)index;
+	(void)uv; (void)hit_normal; (void)hit_tex_coords;
+}
+
+struct object_ops blackhole_ops = {
+	.destroy	   = blackhole_destroy,
+	.unmap		   = blackhole_unmap,
+	.intersect	   = blackhole_intersect_nop,
+	.get_surface_props = blackhole_surface_props_nop,
+};
+
 static void triangle_mesh_destroy(struct object *obj)
 {
 	struct triangle_mesh *mesh =
@@ -543,6 +583,11 @@ enum {
 	OBJECT_SPHERE_POS,
 	OBJECT_PLANE_NORMAL,
 	OBJECT_PLANE_D,
+	OBJECT_BLACKHOLE_MASS,
+	OBJECT_BLACKHOLE_STEP,
+	OBJECT_BLACKHOLE_MAXSTEPS,
+	OBJECT_BLACKHOLE_ESCAPE,
+	OBJECT_BLACKHOLE_REDSHIFT,
 };
 
 static char *const object_token[] = {
@@ -563,10 +608,15 @@ static char *const object_token[] = {
 	[OBJECT_FUZZ]	       = "fuzz",
 	[OBJECT_MESH_FILE]     = "file",
 	[OBJECT_MESH_SMOOTH_SHADING] = "smooth-shading",
-	[OBJECT_SPHERE_RADIUS] = "radius",
-	[OBJECT_SPHERE_POS]    = "pos",
-	[OBJECT_PLANE_NORMAL]  = "normal",
-	[OBJECT_PLANE_D]       = "d",
+	[OBJECT_SPHERE_RADIUS]     = "radius",
+	[OBJECT_SPHERE_POS]        = "pos",
+	[OBJECT_PLANE_NORMAL]      = "normal",
+	[OBJECT_PLANE_D]           = "d",
+	[OBJECT_BLACKHOLE_MASS]    = "mass",
+	[OBJECT_BLACKHOLE_STEP]    = "step",
+	[OBJECT_BLACKHOLE_MAXSTEPS]= "maxsteps",
+	[OBJECT_BLACKHOLE_ESCAPE]  = "escape",
+	[OBJECT_BLACKHOLE_REDSHIFT]= "colorshift",
 	NULL
 };
 
@@ -595,6 +645,14 @@ struct object_params {
 		vec3_t normal;
 		float  d;
 	} plane;
+	struct {
+		vec3_t   pos;
+		float    mass;
+		float    DT;
+		float    escape_dist;
+		float    colorshift_strength;
+		uint32_t max_steps;
+	} blackhole;
 };
 
 static void default_object_params(struct object_params *params)
@@ -617,6 +675,12 @@ static void default_object_params(struct object_params *params)
 	params->sphere.pos = vec3(0.0f, 0.0f, 0.0f);
 	params->plane.normal = vec3(0.0f, 1.0f, 0.0f);
 	params->plane.d = 0.0f;
+	params->blackhole.pos             = vec3(0.0f, 0.0f, 0.0f);
+	params->blackhole.mass            = 1.5f;
+	params->blackhole.DT              = 0.05f;
+	params->blackhole.escape_dist     = 30.0f;
+	params->blackhole.colorshift_strength = 1.0f;
+	params->blackhole.max_steps       = 1000;
 	params->o2w = m4_identity();
 }
 
@@ -674,6 +738,18 @@ static void plane_init(struct plane *plane, struct object_params *params)
 	/* Form two basis vectors */
 	plane->b1 = v3_cross(plane->normal, up);
 	plane->b2 = v3_cross(plane->normal, plane->b1);
+}
+
+static void blackhole_init(struct blackhole *bh, struct object_params *params)
+{
+	object_init(&bh->obj, &blackhole_ops, params);
+	bh->center      = params->blackhole.pos;
+	bh->mass        = params->blackhole.mass;
+	bh->RS          = 2.0f * params->blackhole.mass; /* RS = 2*G*M, G=1 */
+	bh->DT               = params->blackhole.DT;
+	bh->escape_dist      = params->blackhole.escape_dist;
+	bh->colorshift_strength= params->blackhole.colorshift_strength;
+	bh->max_steps        = params->blackhole.max_steps;
 }
 
 static void triangle_mesh_init(struct accel *accel, struct object_params *params,
@@ -1066,6 +1142,8 @@ static int parse_object_params(char *subopts, struct object_params *params)
 				params->type = PLANE_OBJECT;
 			else if (!strcmp(real_value, "mesh"))
 				params->type = MESH_OBJECT;
+			else if (!strcmp(real_value, "blackhole"))
+				params->type = BLACKHOLE_OBJECT;
 			else {
 				fprintf(stderr, "Invalid object type '%s'\n",
 					real_value);
@@ -1218,6 +1296,30 @@ static int parse_object_params(char *subopts, struct object_params *params)
 		case OBJECT_PLANE_D:
 			fptr = &params->plane.d;
 			break;
+		case OBJECT_BLACKHOLE_MASS:
+			fptr = &params->blackhole.mass;
+			break;
+		case OBJECT_BLACKHOLE_STEP:
+			fptr = &params->blackhole.DT;
+			break;
+		case OBJECT_BLACKHOLE_ESCAPE:
+			fptr = &params->blackhole.escape_dist;
+			break;
+		case OBJECT_BLACKHOLE_REDSHIFT:
+			fptr = &params->blackhole.colorshift_strength;
+			break;
+		case OBJECT_BLACKHOLE_MAXSTEPS: {
+			uint32_t v;
+
+			ret = sscanf(value, "%u", &v);
+			if (ret != 1) {
+				fprintf(stderr, "Invalid object '%s' parameter\n",
+					object_token[c]);
+				return -EINVAL;
+			}
+			params->blackhole.max_steps = v;
+			break;
+		}
 		case OBJECT_SPHERE_POS:
 		case OBJECT_PLANE_NORMAL: {
 			vec3_t vec;
@@ -1235,6 +1337,7 @@ static int parse_object_params(char *subopts, struct object_params *params)
 
 			if (c == OBJECT_SPHERE_POS) {
 				params->sphere.pos = vec;
+				params->blackhole.pos = vec; /* shared pos= token */
 			} else if (c == OBJECT_PLANE_NORMAL) {
 				params->plane.normal = vec;
 			}
@@ -1334,6 +1437,8 @@ static int parse_object_params(char *subopts, struct object_params *params)
 			return -EINVAL;
 		}
 		break;
+	case BLACKHOLE_OBJECT:
+		break;
 	default:
 		fprintf(stderr, "Unknown object type\n");
 		return -EINVAL;
@@ -1388,6 +1493,17 @@ static int objects_create_from_params(struct scene *scene,
 		}
 		fprintf(stderr, "Invalid object file extension\n");
 		return -EINVAL;
+	}
+	case BLACKHOLE_OBJECT: {
+		struct blackhole *bh;
+
+		bh = buf_allocate(scene->accel, sizeof(*bh));
+		if (!bh)
+			return -ENOMEM;
+		blackhole_init(bh, params);
+		list_add_tail(&bh->obj.entry, &scene->notmesh_objects);
+		scene->num_blackholes++;
+		return 0;
 	}
 	default:
 		/* Params already validated */
@@ -2399,6 +2515,14 @@ static void usage(void)
 	       "                 'file'   - required paremeter, file path of the mesh object\n"
 	       "                 e.g.: '--object type=sphere,radius=1.0,Ks=2.0,pos=1.0,0.1,0.3,n=5.0'\n"
 	       "                 'smooth-shading' - enables smooth shading, should '0','1','false' or true'\n"
+	       "                Black hole:\n"
+	       "                 'pos'      - position in world space, accepts float,float,float (default: 0,0,0)\n"
+	       "                 'mass'     - black hole mass M; Schwarzschild radius RS=2M (default: 1.5)\n"
+	       "                 'step'     - Euler integration step size DT; smaller = more accurate (default: 0.05)\n"
+	       "                 'escape'   - distance from BH beyond which gravity is ignored (default: 30.0)\n"
+	       "                 'maxsteps' - max integration steps per ray (default: 1000)\n"
+	       "                 'colorshift' - spectral colour shift strength; 0=off, 1=physical, >1=artistic (default: 1.0)\n"
+	       "                 e.g.: '--object type=blackhole,pos=0,0,-5,mass=2.0,colorshift=3.0'\n"
 	       "\n"
 		);
 
