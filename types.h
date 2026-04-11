@@ -29,6 +29,13 @@
 /* In OpenCL all static inline functions are device-callable by default */
 #define __accelerated
 
+/*
+ * OpenCL C does not define 'typeof', but Clang (used by most OpenCL runtimes)
+ * supports '__typeof__' as a GNU extension.  Map typeof to __typeof__ so that
+ * shared macros (container_of, SWAP, ALIGN_PTR_*) compile without changes.
+ */
+#define typeof __typeof__
+
 #define sinf    sin
 #define cosf    cos
 #define tanf    tan
@@ -190,17 +197,17 @@ static inline uint32_t fls_bit(uint64_t x)
 
 static inline uint64_t atomic64_cmpxchg(__global uint64_t *p, uint64_t old, uint64_t new)
 {
-	return atom_cmpxchg((__global long *)p, old, new);
+	return atom_cmpxchg((__global ulong *)p, (ulong)old, (ulong)new);
 }
 
 static inline uint32_t atomic64_dec(__global uint64_t *p)
 {
-	return atom_dec((__global long *)p);
+	return (uint32_t)atom_dec((__global ulong *)p);
 }
 
 static inline uint32_t atomic64_inc(__global uint64_t *p)
 {
-	return atom_inc((__global long *)p);
+	return (uint32_t)atom_inc((__global ulong *)p);
 }
 
 static inline uint32_t atomic32_dec(__global uint32_t *p)
