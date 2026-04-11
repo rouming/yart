@@ -16,6 +16,15 @@
 #ifdef __CUDACC__
 /* Mark functions callable from both host and CUDA device */
 #define __accelerated __device__ __host__
+/*
+ * fmaxf/fminf: define as ternary macros for both host and device passes.
+ * The <math.h> declarations are not consistently marked __device__ across
+ * CUDA versions, and the __fmaxf/__fminf intrinsics are __host__-only in
+ * some releases, causing "calling __host__ function from __host__ __device__"
+ * warnings.  The ternary is always valid in both compilation passes.
+ */
+#define fmaxf(a, b) ((a) >= (b) ? (a) : (b))
+#define fminf(a, b) ((a) <= (b) ? (a) : (b))
 /* Override __constant for device compilation: use CUDA constant memory */
 #ifdef __CUDA_ARCH__
 #undef __constant
@@ -49,9 +58,11 @@
 #define acosf(x)     acos((float)(x))
 #define atan2f(y, x) atan2((float)(y), (float)(x))
 #define fabsf(x)     fabs((float)(x))
-#define sqrtf(x)     sqrt((float)(x))
-#define powf(x, y)   pow((float)(x), (float)(y))
-#define floorf(x)    floor((float)(x))
+#define sqrtf(x)      sqrt((float)(x))
+#define powf(x, y)    pow((float)(x), (float)(y))
+#define floorf(x)     floor((float)(x))
+#define fmaxf(x, y)   fmax((float)(x), (float)(y))
+#define fminf(x, y)   fmin((float)(x), (float)(y))
 
 typedef unsigned long  uint64_t;
 typedef long           int64_t;
