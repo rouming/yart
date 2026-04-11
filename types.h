@@ -36,15 +36,22 @@
  */
 #define typeof __typeof__
 
-#define sinf    sin
-#define cosf    cos
-#define tanf    tan
-#define acosf   acos
-#define atan2f  atan2
-#define fabsf   fabs
-#define sqrtf   sqrt
-#define powf    pow
-#define floorf  floor
+/*
+ * Map *f math functions to their generic OpenCL equivalents, forcing the
+ * float type explicitly.  A plain '#define sqrtf sqrt' leaves the compiler
+ * to choose between float and double overloads from cl_kernel.h, causing
+ * "call to 'sqrt' is ambiguous" errors.  The (float) cast removes the
+ * ambiguity and matches what the *f suffix means on the host.
+ */
+#define sinf(x)      sin((float)(x))
+#define cosf(x)      cos((float)(x))
+#define tanf(x)      tan((float)(x))
+#define acosf(x)     acos((float)(x))
+#define atan2f(y, x) atan2((float)(y), (float)(x))
+#define fabsf(x)     fabs((float)(x))
+#define sqrtf(x)     sqrt((float)(x))
+#define powf(x, y)   pow((float)(x), (float)(y))
+#define floorf(x)    floor((float)(x))
 
 typedef unsigned long  uint64_t;
 typedef long           int64_t;
