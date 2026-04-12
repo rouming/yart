@@ -215,17 +215,17 @@ static inline uint32_t fls_bit(uint64_t x)
 
 static inline uint64_t atomic64_cmpxchg(__global uint64_t *p, uint64_t old, uint64_t new)
 {
-	return atom_cmpxchg((volatile __global ulong *)p, (ulong)old, (ulong)new);
+	return (uint64_t)atom_cmpxchg((volatile __global long *)p, (long)old, (long)new);
 }
 
 static inline uint32_t atomic64_dec(__global uint64_t *p)
 {
-	return (uint32_t)atom_dec((volatile __global ulong *)p);
+	return (uint32_t)atom_dec((volatile __global long *)p);
 }
 
 static inline uint32_t atomic64_inc(__global uint64_t *p)
 {
-	return (uint32_t)atom_inc((volatile __global ulong *)p);
+	return (uint32_t)atom_inc((volatile __global long *)p);
 }
 
 static inline uint32_t atomic32_dec(__global uint32_t *p)
