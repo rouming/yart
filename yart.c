@@ -2653,7 +2653,7 @@ int main(int argc, char **argv)
 				return -EINVAL;
 			}
 			if (!ray_depth) {
-				fprintf(stderr, "Invalid ray depth value.\n");
+				fprintf(stderr, "Invalid --ray-depth value.\n");
 				return -EINVAL;
 			}
 			break;
@@ -2661,7 +2661,7 @@ int main(int argc, char **argv)
 		case OPT_SAMPLES_PER_PIXEL: {
 			ret = sscanf(optarg, "%u", &samples_per_pixel);
 			if (ret != 1) {
-				fprintf(stderr, "Invalid --ray-depth, unsigned int.\n");
+				fprintf(stderr, "Invalid --samples-per-pixel, unsigned int.\n");
 				return -EINVAL;
 			}
 			break;
