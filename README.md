@@ -145,7 +145,7 @@ Gravitational redshift dims the blue and green channels of light that passes
 close to the horizon, so objects seen through the inner lensing region shift
 toward red.
 
-![Black Hole](https://i.imgur.com/LYOr6LL.png)
+![Black Hole 1](https://i.imgur.com/LYOr6LL.png)
 
 ```
 ./yart --object type=sphere,radius=0.6,pos=-12,1.3,-13,Kd=0,0,1,Ks=0.05 \
@@ -160,6 +160,24 @@ toward red.
        \
        --backcolor 3cacd7 \
        --pitch -5 --yaw -49 --pos 6,3,3
+```
+
+This is another variation of a scene with a black hole under four point lights.
+
+![Black Hole 2](https://i.imgur.com/jIbkgnN.png)
+
+```
+./yart --object type=plane,Ks=0.05,Kd=0.8,r=0.4,pattern=check \
+       --object type=sphere,radius=1,pos=0,1,0,Ks=0.5,Kd=0.6,0.6,0.9,r=0.2,n=500 \
+       --object type=sphere,radius=0.5,pos=-1,0.5,-1.5,Ks=0.5,Kd=0.8,0.4,0.4,r=0.2,n=500 \
+       --object type=blackhole,pos=8,3,-1,mass=0.2,step=0.05,maxsteps=1000,escape=30 \
+	   \
+       --light type=point,pos=-2,2.5,0,intensity=600,color=b2994c \
+	   --light type=point,pos=1.5,2.5,-1.5,intensity=400,color=727f99 \
+	   --light type=point,pos=1.5,2.5,1.5,intensity=200,color=b2ccb2 \
+	   --light type=point,pos=0,3.5,0,intensity=600,color=4c4c4c \
+	   \
+	   --pitch -10.33 --yaw -82.72 --pos 22,5.5,1
 ```
 
 ## Example 2: RTIOW Final Scene (path tracing)
