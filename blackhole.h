@@ -208,6 +208,40 @@ bh_compute_z(float phi_emit, float phi_cam)
 }
 
 /*
+ * bh_cast_straight -- cast a straight ray_trace(), compute colour shift, and
+ * write back the updated origin/direction.
+ *
+ * Used at every exit point of blackhole_march where the ray is no longer
+ * under gravitational influence: pre-march shortcut, escape, max-steps.
+ * Passing pos/d by value lets callers keep their local state unchanged if
+ * the pointer targets differ (escape path), while the pre-march shortcut
+ * simply passes *orig and *dir and writes them back in place.
+ */
+__accelerated static inline bool
+bh_cast_straight(__global struct scene *scene,
+		 vec3_t pos, vec3_t d,
+		 struct intersection *isect,
+		 __global struct octant_queue_entry *q_entries, uint32_t q_depth,
+		 float phi_cam, float colorshift_strength,
+		 vec3_t *orig, vec3_t *dir,
+		 float *bh_z, float *bh_strength)
+{
+	bool hit = ray_trace(scene, &pos, &d, isect, PRIMARY_RAY, q_entries, q_depth);
+
+	if (hit) {
+		vec3_t hit_pt   = v3_add(pos, v3_muls(d, isect->near));
+		float  phi_emit = bh_potential(scene, &hit_pt);
+		*bh_z = bh_compute_z(phi_emit, phi_cam);
+	} else {
+		*bh_z = bh_compute_z(0.0f, phi_cam);
+	}
+	*bh_strength = colorshift_strength;
+	*orig = pos;
+	*dir  = d;
+	return hit;
+}
+
+/*
  * blackhole_march -- integrate a ray through a gravitational field using
  * Euler steps, checking for event horizon absorption and object hits.
  *
@@ -345,18 +379,10 @@ blackhole_march(__global struct scene *scene,
 			 * plain intersection test. We MUST still calculate colour shift
 			 * because the camera might be deep in a gravity well looking away.
 			 */
-			bool hit = ray_trace(scene, orig, dir, isect, PRIMARY_RAY,
-					     q_entries, q_depth);
-
-			if (hit) {
-				vec3_t hit_pt   = v3_add(*orig, v3_muls(*dir, isect->near));
-				float  phi_emit = bh_potential(scene, &hit_pt);
-				*bh_z           = bh_compute_z(phi_emit, phi_cam);
-			} else {
-				*bh_z           = bh_compute_z(0.0f, phi_cam); /* Sky */
-			}
-			*bh_strength = colorshift_strength;
-			return hit;
+			return bh_cast_straight(scene, *orig, *dir, isect,
+						q_entries, q_depth,
+						phi_cam, colorshift_strength,
+						orig, dir, bh_z, bh_strength);
 		}
 	}
 
@@ -485,39 +511,19 @@ blackhole_march(__global struct scene *scene,
 				}
 			}
 			if (escaped) {
-				bool hit = ray_trace(scene, &pos, &d, isect,
-						     PRIMARY_RAY, q_entries, q_depth);
-				if (hit) {
-					vec3_t hit_pt   = v3_add(pos, v3_muls(d, isect->near));
-					float  phi_emit = bh_potential(scene, &hit_pt);
-					*bh_z = bh_compute_z(phi_emit, phi_cam);
-				} else {
-					*bh_z = bh_compute_z(0.0f, phi_cam);
-				}
-				*bh_strength = colorshift_strength;
-				*orig = pos;
-				*dir  = d;
-				return hit;
+				return bh_cast_straight(scene, pos, d, isect,
+							q_entries, q_depth,
+							phi_cam, colorshift_strength,
+							orig, dir, bh_z, bh_strength);
 			}
 		}
 	}
 
 	/* max_steps exhausted -- treat as escaped, cast straight ray */
-	{
-		bool hit = ray_trace(scene, &pos, &d, isect,
-				     PRIMARY_RAY, q_entries, q_depth);
-		if (hit) {
-			vec3_t hit_pt   = v3_add(pos, v3_muls(d, isect->near));
-			float  phi_emit = bh_potential(scene, &hit_pt);
-			*bh_z = bh_compute_z(phi_emit, phi_cam);
-		} else {
-			*bh_z = bh_compute_z(0.0f, phi_cam);
-		}
-		*bh_strength = colorshift_strength;
-		*orig = pos;
-		*dir  = d;
-		return hit;
-	}
+	return bh_cast_straight(scene, pos, d, isect,
+				q_entries, q_depth,
+				phi_cam, colorshift_strength,
+				orig, dir, bh_z, bh_strength);
 }
 
 #endif /* BLACKHOLE_H */
