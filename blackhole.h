@@ -462,8 +462,10 @@ blackhole_march(__global struct scene *scene,
 		 * first step for cameras outside the sphere (the pre-march
 		 * ray-sphere test already handled that fast path above).
 		 *
-		 * phi_emit = 0 for sky: the photon originates at infinity,
-		 * so z = 1/sqrt(1 + 2*phi_cam).
+		 * Cast a straight ray_trace() from the escape position rather
+		 * than immediately returning sky: the bent ray may still hit
+		 * objects that lie beyond the escape sphere.  This mirrors what
+		 * the pre-march shortcut does for rays that never come near a BH.
 		 */
 		{
 			bool escaped = true;
@@ -483,19 +485,39 @@ blackhole_march(__global struct scene *scene,
 				}
 			}
 			if (escaped) {
-				*bh_z        = bh_compute_z(0.0f, phi_cam);
+				bool hit = ray_trace(scene, &pos, &d, isect,
+						     PRIMARY_RAY, q_entries, q_depth);
+				if (hit) {
+					vec3_t hit_pt   = v3_add(pos, v3_muls(d, isect->near));
+					float  phi_emit = bh_potential(scene, &hit_pt);
+					*bh_z = bh_compute_z(phi_emit, phi_cam);
+				} else {
+					*bh_z = bh_compute_z(0.0f, phi_cam);
+				}
 				*bh_strength = colorshift_strength;
-				*dir = d;
-				return false;
+				*orig = pos;
+				*dir  = d;
+				return hit;
 			}
 		}
 	}
 
-	/* max_steps exhausted -- treat as escaped */
-	*bh_z        = bh_compute_z(0.0f, phi_cam);
-	*bh_strength = colorshift_strength;
-	*dir = d;
-	return false;
+	/* max_steps exhausted -- treat as escaped, cast straight ray */
+	{
+		bool hit = ray_trace(scene, &pos, &d, isect,
+				     PRIMARY_RAY, q_entries, q_depth);
+		if (hit) {
+			vec3_t hit_pt   = v3_add(pos, v3_muls(d, isect->near));
+			float  phi_emit = bh_potential(scene, &hit_pt);
+			*bh_z = bh_compute_z(phi_emit, phi_cam);
+		} else {
+			*bh_z = bh_compute_z(0.0f, phi_cam);
+		}
+		*bh_strength = colorshift_strength;
+		*orig = pos;
+		*dir  = d;
+		return hit;
+	}
 }
 
 #endif /* BLACKHOLE_H */
