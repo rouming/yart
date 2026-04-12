@@ -1,5 +1,8 @@
 # YART
-YART is a Yet Another Ray Tracer renderer that can be accelerated by OpenCL or CUDA.
+YART is a Yet Another Ray Tracer renderer that can be accelerated by
+OpenCL or CUDA, with black hole simulation as a bonus (see examples
+below).
+
 Based on lessons from http://scratchapixel.com and http://pbr-book.org
 
 The main goal is to learn ray tracing algorithms and implement C code that can be
@@ -132,9 +135,9 @@ with a checkered plane as the ground.  From the camera's viewpoint the black
 hole sits almost exactly in front of the blue sphere, producing an
 **Einstein ring**: rays that would normally miss the blue sphere are bent by
 gravity around all sides of the black hole and redirected toward the camera,
-so the blue sphere appears as a luminous ring encircling the dark event
-horizon.  The green and red spheres are off-axis and show up as ordinary
-lensed smears rather than rings.
+so the blue sphere appears as a blue ring encircling the dark event
+horizon. The green and red spheres are off-axis, flipped, and appear as ordinary
+lensed objects.
 
 The event horizon itself is visible as a black disc -- rays that cross the
 Schwarzschild radius (RS = 2*mass) are absorbed and return no color.
